@@ -316,6 +316,29 @@ export function useTutorSession(sessionId: string) {
     [conceptIndex, mastery, runRequest],
   );
 
+  const requestNextTopic = useCallback(
+    (base: BaseRequest, command: string) => {
+      if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
+      void runRequest(
+        { mode: "quiz", conceptIndex, mastery, ...base },
+        { echoStudentText: command },
+      );
+    },
+    [conceptIndex, mastery, runRequest],
+  );
+
+  const advanceAfterQuiz = useCallback(
+    (isLastConcept: boolean) => {
+      if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
+      setActiveCheckin(null);
+      autoAdvanceTimer.current = setTimeout(() => {
+        if (isLastConcept) setLessonDone(true);
+        else setConceptIndex((index) => index + 1);
+      }, AUTO_ADVANCE_DELAY_MS);
+    },
+    [setActiveCheckin],
+  );
+
   return {
     turns: isSessionReady ? turns : [],
     sessionLoaded: isSessionReady,
@@ -332,5 +355,7 @@ export function useTutorSession(sessionId: string) {
     teachConcept,
     askQuestion,
     submitCheckin,
+    requestNextTopic,
+    advanceAfterQuiz,
   };
 }

@@ -18,7 +18,7 @@ import {
   type TutorBlock,
   type TutorRequest,
 } from "@/lib/tutor-blocks";
-import type { TeachingStyle } from "@/lib/course-types";
+import type { QuizQuestion, TeachingStyle } from "@/lib/course-types";
 
 // Override with a GROQ_MODEL env var if you want a different model; this is
 // the current recommended Groq-hosted default. GPT-OSS models are reasoning
@@ -252,6 +252,153 @@ async function groqJudge(
   return { understood: parsed.understood, feedback: parsed.feedback };
 }
 
+async function groqQuiz(body: TutorRequest, apiKey: string): Promise<TutorBlock[]> {
+  const concept = body.lesson.concepts[body.conceptIndex] ?? body.lesson.title;
+  const raw = await callGroq(
+    apiKey,
+    [
+      "You are writing a short checkpoint quiz for a student who has just studied one concept.",
+      levelInstruction(body.level),
+      MATH_RULE,
+      `Write exactly 3 distinct multiple-choice questions about the concept "${concept}".`,
+      "Use only the saved course notes; do not invent facts. Each question must have exactly four plausible options, one unambiguous correct answer, and a concise explanation that teaches the correct answer.",
+      'Respond with ONLY JSON: {"questions":[{"prompt":"...","options":["...","...","...","..."],"answerIndex":0,"explanation":"..."}]}',
+    ].join(" "),
+    [courseNotes(body), `Current concept: ${concept}.`].join("\n"),
+    { json: true, reasoningEffort: "low" },
+  );
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("No JSON in quiz response");
+  const parsed = JSON.parse(match[0]) as { questions?: unknown };
+  if (!Array.isArray(parsed.questions) || parsed.questions.length !== 3) {
+    throw new Error("Quiz response must contain exactly three questions");
+  }
+
+  const questions: QuizQuestion[] = parsed.questions.map((value) => {
+    if (!value || typeof value !== "object") throw new Error("Malformed quiz question");
+    const item = value as Record<string, unknown>;
+    const options = item["options"];
+    const answerIndex = item["answerIndex"];
+    if (
+      typeof item["prompt"] !== "string" ||
+      !item["prompt"].trim() ||
+      !Array.isArray(options) ||
+      options.length !== 4 ||
+      !options.every((option) => typeof option === "string" && option.trim()) ||
+      typeof answerIndex !== "number" ||
+      !Number.isInteger(answerIndex) ||
+      answerIndex < 0 ||
+      answerIndex > 3 ||
+      typeof item["explanation"] !== "string" ||
+      !item["explanation"].trim()
+    ) {
+      throw new Error("Malformed quiz question");
+    }
+    return {
+      id: nextId("advance-quiz"),
+      kind: "multiple-choice",
+      prompt: item["prompt"].trim().slice(0, 400),
+      options: (options as string[]).map((option) => option.trim().slice(0, 240)),
+      answerIndex,
+      explanation: item["explanation"].trim().slice(0, 500),
+    };
+  });
+  return questions.map((question) => ({
+    id: nextId(),
+    kind: "quiz",
+    question,
+    advance: true,
+  }));
+}
+
+function simulatedQuiz(body: TutorRequest): TutorBlock[] {
+  const { lesson, conceptIndex } = body;
+  const concept = lesson.concepts[conceptIndex] ?? lesson.title;
+  const questions: QuizQuestion[] = [];
+
+  const authored = lesson.quiz[0];
+  if (authored) {
+    questions.push({
+      ...authored,
+      id: nextId("advance-quiz"),
+      kind: "multiple-choice",
+    });
+  }
+
+  const uniqueChoices = (answer: string, candidates: string[]) => {
+    const choices = [answer];
+    for (const candidate of candidates) {
+      if (candidate.trim() && !choices.includes(candidate.trim())) choices.push(candidate.trim());
+      if (choices.length === 4) break;
+    }
+    while (choices.length < 4) choices.push(`Another option (${choices.length + 1})`);
+    return choices;
+  };
+  let fallbackQuestionCount = 0;
+  const createFallbackQuestion = (
+    prompt: string,
+    answer: string,
+    candidates: string[],
+    explanation: string,
+  ): QuizQuestion => {
+    const options = uniqueChoices(answer, candidates);
+    const answerIndex = fallbackQuestionCount % options.length;
+    const firstOption = options[0] ?? answer;
+    const correctOption = options[answerIndex] ?? answer;
+    options[0] = correctOption;
+    options[answerIndex] = firstOption;
+    fallbackQuestionCount += 1;
+    return {
+      id: nextId("advance-quiz"),
+      kind: "multiple-choice",
+      prompt,
+      options,
+      answerIndex,
+      explanation,
+    };
+  };
+
+  questions.push(
+    createFallbackQuestion(
+      "Which concept are we moving on from?",
+      concept,
+      [...lesson.concepts.filter((item) => item !== concept), lesson.title, ...lesson.objectives],
+      `The current concept is ${concept}.`,
+    ),
+    createFallbackQuestion(
+      "Which statement is one of this lesson's learning objectives?",
+      lesson.objectives[0] ?? lesson.intuition,
+      [
+        ...lesson.concepts.map((item) => `Study the unrelated topic: ${item}`),
+        `Review the lesson titled "${lesson.title}"`,
+        `Study the module "${body.moduleTitle}"`,
+      ],
+      `One stated learning objective is: ${lesson.objectives[0] ?? lesson.intuition}`,
+    ),
+  );
+  const followingConcept = lesson.concepts[conceptIndex + 1];
+  const orderedConcept = followingConcept ?? concept;
+  questions.push(
+    createFallbackQuestion(
+      followingConcept
+        ? "Which concept comes immediately after this one in the lesson?"
+        : "Which concept are we finishing in this lesson?",
+      orderedConcept,
+      lesson.concepts.filter((item) => item !== orderedConcept),
+      followingConcept
+        ? `The lesson introduces ${followingConcept} immediately after ${concept}.`
+        : `The final concept in this lesson is ${concept}.`,
+    ),
+  );
+
+  return questions.slice(0, 3).map((question) => ({
+    id: nextId(),
+    kind: "quiz",
+    question,
+    advance: true,
+  }));
+}
+
 export const Route = createFileRoute("/api/tutor")({
   server: {
     handlers: {
@@ -264,7 +411,10 @@ export const Route = createFileRoute("/api/tutor")({
         }
         if (
           !body?.lesson?.title ||
-          (body.mode !== "concept" && body.mode !== "check" && body.mode !== "ask")
+          (body.mode !== "concept" &&
+            body.mode !== "check" &&
+            body.mode !== "ask" &&
+            body.mode !== "quiz")
         ) {
           return new Response("Invalid tutor request", { status: 400 });
         }
@@ -292,6 +442,8 @@ export const Route = createFileRoute("/api/tutor")({
               blocks = (await groqTeachConcept(body, teaching, groqKey)).blocks;
             } else if (body.mode === "ask") {
               blocks = await groqAsk(body, teaching, groqKey);
+            } else if (body.mode === "quiz") {
+              blocks = await groqQuiz(body, groqKey);
             } else {
               const { understood, feedback } = await groqJudge(body, groqKey);
               const advance = understood || !!body.hinted;
@@ -324,6 +476,8 @@ export const Route = createFileRoute("/api/tutor")({
             blocks = simulatedConceptTeach(body, teaching);
           } else if (body.mode === "ask") {
             blocks = simulatedAsk(body);
+          } else if (body.mode === "quiz") {
+            blocks = simulatedQuiz(body);
           } else {
             const { understood, feedback } = simulatedJudge(
               body.lesson,

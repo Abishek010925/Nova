@@ -17,15 +17,13 @@ export function TutorBlockView({
   checkinBusy,
 }: {
   block: TutorBlock;
-  onAnswer?: ((questionId: string, correct: boolean) => void) | undefined;
+  onAnswer?: ((questionId: string, correct: boolean, advanceQuiz: boolean) => void) | undefined;
   onCheckin?: ((text: string) => void) | undefined;
   checkinResult?: { correct: boolean } | null | undefined;
   checkinBusy?: boolean | undefined;
 }) {
   if (block.kind === "text") {
-    return (
-      <Rich className="tutor-prose">{block.markdown}</Rich>
-    );
+    return <Rich className="tutor-prose">{block.markdown}</Rich>;
   }
 
   if (block.kind === "code") {
@@ -60,7 +58,7 @@ export function TutorBlockView({
   return (
     <QuizCard
       question={block.question}
-      onAnswer={(correct) => onAnswer?.(block.question.id, correct)}
+      onAnswer={(correct) => onAnswer?.(block.question.id, correct, block.advance === true)}
     />
   );
 }

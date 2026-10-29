@@ -11,7 +11,7 @@ export type TutorBlock =
   | { id: string; kind: "text"; markdown: string }
   | { id: string; kind: "code"; label: string; language: string; code: string }
   | { id: string; kind: "mermaid"; title: string; chart: string }
-  | { id: string; kind: "quiz"; question: QuizQuestion }
+  | { id: string; kind: "quiz"; question: QuizQuestion; advance?: boolean }
   | CheckinBlock;
 
 export type TutorTurn = {
@@ -39,7 +39,7 @@ export type ConceptOutcome = {
 };
 
 export type TutorRequest = {
-  mode: "concept" | "check" | "ask";
+  mode: "concept" | "check" | "ask" | "quiz";
   /** Index into lesson.concepts — which single concept this turn is about. */
   conceptIndex: number;
   /** True if the student already got one hint on this concept this round (caps the retry loop). */

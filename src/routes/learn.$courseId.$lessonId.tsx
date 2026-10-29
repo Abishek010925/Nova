@@ -12,6 +12,8 @@ import { useLessonPanel } from "@/lib/lesson-panel";
 import { useTutorSession } from "@/lib/use-tutor-session";
 import { cn } from "@/lib/utils";
 
+const QUIZ_FEEDBACK_DELAY_MS = 900;
+
 export const Route = createFileRoute("/learn/$courseId/$lessonId")({
   head: () => ({
     meta: [
@@ -72,6 +74,32 @@ function LevelPicker({
   );
 }
 
+function isNextTopicCommand(message: string): boolean {
+  const command = message
+    .toLowerCase()
+    .trim()
+    .replace(/[.!?]+$/, "")
+    .replace(/\s+/g, " ")
+    .replace(/^(please\s+)|(\s+please)$/g, "");
+  return [
+    "next",
+    "next topic",
+    "next section",
+    "next concept",
+    "go next",
+    "go to next",
+    "go to next topic",
+    "go to next section",
+    "go to next concept",
+    "go to the next topic",
+    "go to the next section",
+    "go to the next concept",
+    "move on",
+    "let's move on",
+    "continue",
+  ].includes(command);
+}
+
 function TutorWorkspace() {
   const { courseId, lessonId } = Route.useParams();
   const navigate = useNavigate();
@@ -113,9 +141,15 @@ function TutorWorkspace() {
     teachConcept,
     askQuestion,
     submitCheckin,
+    requestNextTopic,
+    advanceAfterQuiz,
   } = useTutorSession(`${courseId}/${lessonId}`);
   const [question, setQuestion] = useState("");
   const [answered, setAnswered] = useState<Record<string, boolean>>({});
+  const [advanceQuizPending, setAdvanceQuizPending] = useState(false);
+  const [advanceQuizCompleted, setAdvanceQuizCompleted] = useState(false);
+  const advanceQuizAnswers = useRef(new Set<string>());
+  const advanceQuizAdvanced = useRef(false);
   const streamEnd = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const started = useRef(false);
@@ -128,6 +162,10 @@ function TutorWorkspace() {
     touchLesson(course.id, current.lessonId);
     started.current = false;
     setAnswered({});
+    setAdvanceQuizPending(false);
+    setAdvanceQuizCompleted(false);
+    advanceQuizAnswers.current.clear();
+    advanceQuizAdvanced.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, lessonId, hydrated]);
 
@@ -138,6 +176,18 @@ function TutorWorkspace() {
     // Restore the saved cursor once; later concept-index changes should trigger teaching.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionLoaded]);
+
+  useEffect(() => {
+    if (error) setAdvanceQuizPending(false);
+  }, [error]);
+
+  useEffect(() => {
+    if (!advanceQuizCompleted || !current || conceptIndex < current.lesson.concepts.length - 1) {
+      return;
+    }
+    const timer = setTimeout(() => finishRef.current(), QUIZ_FEEDBACK_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [advanceQuizCompleted, conceptIndex, current]);
 
   useEffect(() => {
     streamEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -206,10 +256,20 @@ function TutorWorkspace() {
 
   const requiresQuiz = course.teaching.enforceQuizzes && lesson.quiz.length > 0;
 
-  const onAnswer = (questionId: string, correct: boolean) => {
+  const onAnswer = (questionId: string, correct: boolean, isAdvanceQuiz: boolean) => {
     setAnswered((a) => ({ ...a, [questionId]: correct }));
     recordAttempt(course.id, questionId, correct);
     toast[correct ? "success" : "error"](correct ? "Correct — nice." : "Review the explanation.");
+    if (isAdvanceQuiz) {
+      advanceQuizAnswers.current.add(questionId);
+      if (advanceQuizAnswers.current.size === 3 && !advanceQuizAdvanced.current) {
+        advanceQuizAdvanced.current = true;
+        setAdvanceQuizPending(false);
+        const isLastConcept = conceptIndex >= lesson.concepts.length - 1;
+        setAdvanceQuizCompleted(isLastConcept);
+        advanceAfterQuiz(isLastConcept);
+      }
+    }
   };
 
   const startLesson = () => {
@@ -218,7 +278,11 @@ function TutorWorkspace() {
   };
 
   const finish = () => {
-    if (requiresQuiz && !quizPassed) {
+    if (advanceQuizPending) {
+      toast.error("Finish all three checkpoint questions before continuing.");
+      return;
+    }
+    if (requiresQuiz && !quizPassed && !advanceQuizCompleted) {
       toast.error("Answer the checkpoint question correctly to complete this lesson.");
       return;
     }
@@ -250,8 +314,16 @@ function TutorWorkspace() {
 
   const submit = () => {
     const q = question.trim();
-    if (!q || streaming || !hasTurns) return;
+    if (!q || streaming || !hasTurns || advanceQuizPending) return;
     setQuestion("");
+    if (isNextTopicCommand(q)) {
+      advanceQuizAnswers.current.clear();
+      advanceQuizAdvanced.current = false;
+      setAdvanceQuizCompleted(false);
+      setAdvanceQuizPending(true);
+      requestNextTopic(baseRequest, q);
+      return;
+    }
     askQuestion(baseRequest, q);
   };
 
@@ -345,7 +417,7 @@ function TutorWorkspace() {
                 <p className="mt-1 text-sm text-muted-foreground">
                   Ask anything below if something is still fuzzy, or move on when you're ready.
                 </p>
-                <Button className="mt-3" onClick={finish}>
+                <Button className="mt-3" onClick={finish} disabled={advanceQuizPending}>
                   <Check className="mr-2 size-4" />
                   {next ? "Mark complete & continue" : "Mark complete & finish course"}
                 </Button>
@@ -383,11 +455,11 @@ function TutorWorkspace() {
               !sessionLoaded
                 ? "Restoring your conversation…"
                 : hasTurns
-                  ? "Ask Sarathi anything about this lesson…"
+                  ? "Ask a question or type “next” to continue…"
                   : "Start the lesson to ask questions…"
             }
             rows={1}
-            disabled={!sessionLoaded || !hasTurns}
+            disabled={!sessionLoaded || !hasTurns || advanceQuizPending}
             aria-label="Message Sarathi"
             className="block max-h-44 w-full resize-none bg-transparent px-3 py-2 text-[15px] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
             onKeyDown={(e) => {
@@ -411,7 +483,7 @@ function TutorWorkspace() {
                 type="submit"
                 size="icon"
                 className="size-8 rounded-full"
-                disabled={streaming || !question.trim() || !hasTurns}
+                disabled={streaming || advanceQuizPending || !question.trim() || !hasTurns}
                 aria-label="Send"
               >
                 <ArrowUp className="size-4" />
