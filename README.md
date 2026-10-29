@@ -55,9 +55,10 @@ npm run dev
 ## Documents → courses
 
 Admins can upload a PDF / .txt / .md (research paper, book, article, magazine, notes) at
-`/admin/ingest`. Text is extracted in the browser (pdf.js), then `/api/course-gen` plans the
-outline and finishes each lesson using `GROQ_API_KEY` (model: `GROQ_MODEL`, default
-`openai/gpt-oss-120b`). Without a key it falls back to a structure-based outline. Scanned
+`/admin/ingest`. Text is extracted in the browser (pdf.js), then `/api/course-gen` drafts
+chapter outlines with `openai/gpt-oss-20b` and lesson content with `openai/gpt-oss-120b`,
+using `GROQ_API_KEY`. Tutor explanations, quizzes, and tutoring also use
+`openai/gpt-oss-120b`. Without a key it falls back to a structure-based outline. Scanned
 (image-only) PDFs need OCR first. Students pick Easy (Class 10) / Normal (Undergrad) / Pro
 (Graduate) in the chat bar; maths renders through KaTeX.
 

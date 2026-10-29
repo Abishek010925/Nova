@@ -4,6 +4,8 @@
  * which are common on free-tier keys when generating many lessons in a row.
  */
 const DEFAULT_MODEL = "openai/gpt-oss-120b";
+export const TUTOR_MODEL = "openai/gpt-oss-120b";
+export const OUTLINE_MODEL = "openai/gpt-oss-20b";
 
 export function groqModel(): string {
   return process.env["GROQ_MODEL"] || DEFAULT_MODEL;
@@ -32,11 +34,11 @@ function isJsonValidationFailure(detail: string): boolean {
 export async function groqJson<T>(
   system: string,
   user: string,
-  opts?: { effort?: "low" | "medium" | "high"; maxTokens?: number },
+  opts?: { effort?: "low" | "medium" | "high"; maxTokens?: number; model?: string },
 ): Promise<T> {
   const apiKey = process.env["GROQ_API_KEY"];
   if (!apiKey) throw new Error("GROQ_API_KEY is not set");
-  const model = groqModel();
+  const model = opts?.model ?? groqModel();
   const reasoning = /gpt-oss|qwen3/i.test(model);
 
   const buildBody = (jsonMode: boolean) =>

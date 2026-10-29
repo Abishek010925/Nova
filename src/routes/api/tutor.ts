@@ -19,11 +19,9 @@ import {
   type TutorRequest,
 } from "@/lib/tutor-blocks";
 import type { QuizQuestion, TeachingStyle } from "@/lib/course-types";
+import { TUTOR_MODEL } from "@/lib/groq";
 
-// Override with a GROQ_MODEL env var if you want a different model; this is
-// the current recommended Groq-hosted default. GPT-OSS models are reasoning
-// models, so `reasoning_format`/`reasoning_effort` below only apply to them.
-const DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b";
+// GPT-OSS is a reasoning model, so reasoning_format/reasoning_effort apply here.
 
 type StreamEvent =
   | { type: "meta"; engine: string; detail?: string }
@@ -85,7 +83,7 @@ async function callGroq(
   user: string,
   opts?: { json?: boolean; reasoningEffort?: "low" | "medium" | "high" },
 ): Promise<string> {
-  const model = process.env["GROQ_MODEL"] || DEFAULT_GROQ_MODEL;
+  const model = TUTOR_MODEL;
   const isReasoningModel = /gpt-oss|qwen3/i.test(model);
 
   const res = await fetch(

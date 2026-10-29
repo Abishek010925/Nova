@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { groqJson, groqModel, hasGroqKey } from "@/lib/groq";
+import { groqJson, hasGroqKey, OUTLINE_MODEL, TUTOR_MODEL } from "@/lib/groq";
 
 /**
  * Course generation from an uploaded document (text already extracted in the browser).
@@ -124,7 +124,11 @@ async function buildOutline(body: {
     (body.map ?? "").slice(0, 22_000),
   ].join("\n");
 
-  const raw = await groqJson<RawOutline>(system, user, { effort: "medium", maxTokens: 12000 });
+  const raw = await groqJson<RawOutline>(system, user, {
+    effort: "medium",
+    maxTokens: 12000,
+    model: OUTLINE_MODEL,
+  });
   const outline = sanitizeOutline(raw, chunkCount);
   if (outline.modules.length === 0) throw new Error("Model returned an outline with no lessons");
   return outline;
@@ -163,6 +167,7 @@ async function buildLesson(body: {
   const raw = await groqJson<Record<string, unknown>>(system, user, {
     effort: "low",
     maxTokens: 1800,
+    model: TUTOR_MODEL,
   });
   const quizRaw = (raw["quiz"] ?? {}) as Record<string, unknown>;
   const options = strList(quizRaw["options"], 4, 220);
@@ -208,7 +213,7 @@ export const Route = createFileRoute("/api/course-gen")({
         try {
           if (body["action"] === "outline") {
             const outline = await buildOutline(body as Parameters<typeof buildOutline>[0]);
-            return Response.json({ ok: true, model: groqModel(), outline });
+            return Response.json({ ok: true, model: OUTLINE_MODEL, outline });
           }
           if (body["action"] === "lesson") {
             const lesson = await buildLesson(body as Parameters<typeof buildLesson>[0]);
