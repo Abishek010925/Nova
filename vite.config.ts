@@ -31,8 +31,8 @@ export default defineConfig({
   vite: {
     preview: {
       allowedHosts: ["sarathi-ai-pathfinder.onrender.com",
-                    "sarathi-ai-pathfinder-1.onrender.com"],
+                    "sarathi-ai-pathfinder-1.onrender.com",
+                    "nova-pka8.onrender.com"],
     },
   },
 });
-
