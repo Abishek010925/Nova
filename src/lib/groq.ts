@@ -20,6 +20,15 @@ function stripReasoning(content: string): string {
     .trim();
 }
 
+function isJsonValidationFailure(detail: string): boolean {
+  try {
+    const error = (JSON.parse(detail) as { error?: { code?: unknown } }).error;
+    return error?.code === "json_validate_failed";
+  } catch {
+    return false;
+  }
+}
+
 export async function groqJson<T>(
   system: string,
   user: string,
@@ -30,34 +39,53 @@ export async function groqJson<T>(
   const model = groqModel();
   const reasoning = /gpt-oss|qwen3/i.test(model);
 
-  const body = JSON.stringify({
-    model,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    temperature: 0.2,
-    max_tokens: opts?.maxTokens ?? 3500,
-    response_format: { type: "json_object" },
-    ...(reasoning ? { reasoning_effort: opts?.effort ?? "low", reasoning_format: "hidden" } : {}),
-  });
-
-  let res: Response | null = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    res = await fetch(`${process.env["GROQ_BASE_URL"] || "https://api.groq.com/openai/v1"}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-      body,
+  const buildBody = (jsonMode: boolean) =>
+    JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      temperature: 0.2,
+      max_tokens: opts?.maxTokens ?? 3500,
+      ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
+      ...(reasoning ? { reasoning_effort: opts?.effort ?? "low", reasoning_format: "hidden" } : {}),
     });
-    if (res.status !== 429 || attempt === 1) break;
-    const retryAfter = Number(res.headers.get("retry-after"));
-    const waitMs = Math.min(20_000, Math.max(2_000, (Number.isFinite(retryAfter) ? retryAfter : 6) * 1000));
-    await new Promise((r) => setTimeout(r, waitMs));
-  }
 
-  if (!res || !res.ok) {
-    const detail = res ? await res.text().catch(() => "") : "";
-    throw new Error(`Groq ${model} request failed (${res?.status ?? "no response"}): ${detail.slice(0, 300)}`);
+  const request = async (jsonMode: boolean) => {
+    let response: Response | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      response = await fetch(
+        `${process.env["GROQ_BASE_URL"] || "https://api.groq.com/openai/v1"}/chat/completions`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+          body: buildBody(jsonMode),
+        },
+      );
+      if (response.status !== 429 || attempt === 1) break;
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const waitMs = Math.min(
+        20_000,
+        Math.max(2_000, (Number.isFinite(retryAfter) ? retryAfter : 6) * 1000),
+      );
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+    return response;
+  };
+
+  let res = await request(true);
+  if (!res) throw new Error(`Groq ${model} request failed: no response`);
+  if (!res.ok) {
+    let detail = await res.text().catch(() => "");
+    if (isJsonValidationFailure(detail)) {
+      res = await request(false);
+      if (!res) throw new Error(`Groq ${model} JSON recovery request failed: no response`);
+      if (!res.ok) detail = await res.text().catch(() => "");
+    }
+    if (!res.ok) {
+      throw new Error(`Groq ${model} request failed (${res.status}): ${detail.slice(0, 500)}`);
+    }
   }
   const payload = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
   const raw = stripReasoning(payload.choices?.[0]?.message?.content ?? "");

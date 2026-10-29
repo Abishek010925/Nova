@@ -23,7 +23,8 @@ type RawOutline = {
   modules?: unknown;
 };
 
-const str = (v: unknown, max = 400): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
+const str = (v: unknown, max = 400): string =>
+  typeof v === "string" ? v.trim().slice(0, max) : "";
 const strList = (v: unknown, maxItems: number, maxLen = 160): string[] =>
   Array.isArray(v)
     ? v
@@ -63,7 +64,11 @@ function sanitizeOutline(raw: RawOutline, chunkCount: number) {
           };
         })
         .filter((l) => l.title);
-      return { title: str(mm["title"], 90) || "Untitled module", summary: str(mm["summary"], 300), lessons };
+      return {
+        title: str(mm["title"], 90) || "Untitled module",
+        summary: str(mm["summary"], 300),
+        lessons,
+      };
     })
     .filter((m) => m.lessons.length > 0)
     .slice(0, 12);
@@ -119,7 +124,7 @@ async function buildOutline(body: {
     (body.map ?? "").slice(0, 22_000),
   ].join("\n");
 
-  const raw = await groqJson<RawOutline>(system, user, { effort: "medium", maxTokens: 6000 });
+  const raw = await groqJson<RawOutline>(system, user, { effort: "medium", maxTokens: 12000 });
   const outline = sanitizeOutline(raw, chunkCount);
   if (outline.modules.length === 0) throw new Error("Model returned an outline with no lessons");
   return outline;
@@ -155,11 +160,15 @@ async function buildLesson(body: {
     `SOURCE EXCERPT:\n"""${(body.excerpt ?? "").slice(0, 5000)}"""`,
   ].join("\n");
 
-  const raw = await groqJson<Record<string, unknown>>(system, user, { effort: "low", maxTokens: 1800 });
+  const raw = await groqJson<Record<string, unknown>>(system, user, {
+    effort: "low",
+    maxTokens: 1800,
+  });
   const quizRaw = (raw["quiz"] ?? {}) as Record<string, unknown>;
   const options = strList(quizRaw["options"], 4, 220);
   const answerIndex = Number(quizRaw["answerIndex"]);
-  let quiz: { prompt: string; options: string[]; answerIndex: number; explanation: string } | null = null;
+  let quiz: { prompt: string; options: string[]; answerIndex: number; explanation: string } | null =
+    null;
   if (
     str(quizRaw["prompt"], 400) &&
     options.length === 4 &&
