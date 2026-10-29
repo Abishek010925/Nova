@@ -1,6 +1,18 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { PenLine, Users, Wand2 } from "lucide-react";
+import { PenLine, Trash2, Users, Wand2 } from "lucide-react";
+import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,7 +46,7 @@ export function statusVariant(status: string) {
 }
 
 function AdminStudio() {
-  const { courses, enrollments, progressFor, quizAverage } = useAppStore();
+  const { courses, enrollments, deleteCourse, progressFor, quizAverage } = useAppStore();
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
@@ -109,11 +121,41 @@ function AdminStudio() {
                   </div>
                   <Progress className="mt-2" value={progressFor(course.id)} />
                 </div>
-                <Button asChild size="sm" variant="outline">
-                  <Link to="/admin/courses/$courseId" params={{ courseId: course.id }}>
-                    <PenLine className="mr-2 size-4" /> Edit outline
-                  </Link>
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button asChild size="sm" variant="outline">
+                    <Link to="/admin/courses/$courseId" params={{ courseId: course.id }}>
+                      <PenLine className="mr-2 size-4" /> Edit outline
+                    </Link>
+                  </Button>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button size="sm" variant="destructive">
+                        <Trash2 className="size-4" /> Delete
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete {course.title}?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This permanently deletes the course and its saved enrollment and progress
+                          data in this browser. This action cannot be undone.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          onClick={() => {
+                            deleteCourse(course.id);
+                            toast.success("Course deleted");
+                          }}
+                        >
+                          Delete course
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
               </CardContent>
             </Card>
           );

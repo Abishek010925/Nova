@@ -69,7 +69,11 @@ function Dashboard() {
       </div>
 
       <div className="mt-8 grid gap-4 sm:grid-cols-3">
-        <StatCard icon={<Target className="size-4" />} label="Lessons completed" value={lessonsDone} />
+        <StatCard
+          icon={<Target className="size-4" />}
+          label="Lessons completed"
+          value={lessonsDone}
+        />
         <StatCard
           icon={<Sparkles className="size-4" />}
           label="Concepts mastered"
@@ -100,7 +104,7 @@ function Dashboard() {
           const resume =
             lessons.find((l) => l.lessonId === enrollment.lastLessonId) ??
             lessons.find((l) => !enrollment.completedLessons.includes(l.lessonId)) ??
-            lessons[0]!;
+            lessons[0];
           const pct = progressFor(course.id);
           const avg = quizAverage(course.id);
           return (
@@ -128,15 +132,21 @@ function Dashboard() {
                   <span>Quiz average: {avg === null ? "—" : `${avg}%`}</span>
                   <span>Last active {relative(enrollment.lastActiveAt)}</span>
                 </div>
-                <Button asChild size="sm">
-                  <Link
-                    to="/learn/$courseId/$lessonId"
-                    params={{ courseId: course.id, lessonId: resume.lessonId }}
-                  >
-                    Resume: {resume.lesson.title}
-                    <ArrowRight className="ml-2 size-4" />
-                  </Link>
-                </Button>
+                {resume ? (
+                  <Button asChild size="sm">
+                    <Link
+                      to="/learn/$courseId/$lessonId"
+                      params={{ courseId: course.id, lessonId: resume.lessonId }}
+                    >
+                      Resume: {resume.lesson.title}
+                      <ArrowRight className="ml-2 size-4" />
+                    </Link>
+                  </Button>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    This course doesn’t have any lessons yet.
+                  </p>
+                )}
               </CardContent>
             </Card>
           );
