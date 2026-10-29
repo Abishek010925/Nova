@@ -1,0 +1,35 @@
+import Markdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
+import remarkMath from "remark-math";
+
+import { normalizeMath } from "@/lib/math";
+
+const remarkPlugins = [[remarkMath, { singleDollarTextMath: true }]] as never;
+const rehypePlugins = [[rehypeKatex, { strict: "ignore", throwOnError: false }]] as never;
+
+/**
+ * The one place tutor text is rendered. Every surface (explanations, quizzes,
+ * check-ins, student bubbles) goes through here so formulas always look the same.
+ */
+export function Rich({ children, className }: { children: string; className?: string }) {
+  return (
+    <div className={className ?? "tutor-prose"}>
+      <Markdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
+        {normalizeMath(children)}
+      </Markdown>
+    </div>
+  );
+}
+
+/** Same pipeline, but renders inline (no wrapping block) for buttons, labels and headings. */
+export function RichInline({ children }: { children: string }) {
+  return (
+    <Markdown
+      remarkPlugins={remarkPlugins}
+      rehypePlugins={rehypePlugins}
+      components={{ p: ({ children: c }) => <>{c}</> }}
+    >
+      {normalizeMath(children)}
+    </Markdown>
+  );
+}

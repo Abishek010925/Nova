@@ -1,0 +1,62 @@
+# Sarathi AI Tutor
+
+Build "Sarathi AI Tutor", an interactive full-stack AI-tutored course platform.
+
+Key Deliverables for the initial build:
+1. Navigation & Role Switcher:
+   - Header with student & admin mode toggle (or role-based access with demo switcher for immediate testing), notifications, and user profile.
+2. Seed Data / Sample Courses:
+   - Seed at least 2 structured, rich demo courses:
+     a) "Distributed Systems & Microservices" (Modules: Architecture & Message Queues, Consensus & Raft, Caching & Data Consistency)
+     b) "Python & Algorithmic Problem Solving"
+   - Each course should have modules, lessons, learning objectives, key concepts, suggested code examples, and pre-configured teaching styles (pacing: balanced, tone: encouraging & intuitive, enforce_quizzes: true).
+3. Student Interactive Tutor Workspace (Core Vertical Slice):
+   - Interactive split/chat view for lessons:
+     - Left/Main pane: AI Tutor conversation stream with typed rich blocks:
+       * Explanatory text & intuition breakdowns (Markdown)
+       * Code snippets with syntax highlighting and copy button
+       * Interactive dynamic Mermaid.js diagrams (flowcharts, sequence diagrams) rendered inline
+       * Interactive Checkpoint Quiz widgets (multiple choice or code prediction) with instant submit, grading feedback, and score tracking
+     - Right/Sidebar pane: Lesson objectives checklist, mastered concepts progress bar, lesson navigation (next/prev lesson), and course outline.
+     - Simulated/Integrated streaming AI tutor engine supporting Groq API configuration (with fallback simulated intelligent responses so the app works immediately out of the box).
+   - "Ask a free-form question" vs "Continue lesson" controls.
+4. Admin Studio & Course Builder:
+   - Admin dashboard with courses list (draft, published, archived), student enrollments, and completion metrics.
+   - Course outline builder (add modules, lessons, objectives, key concepts, teaching style options: depth, tone, pacing).
+   - Raw content ingestion simulator / prompt generator: paste raw text/notes or upload file to generate a structured module outline.
+5. Student Dashboard & Catalog:
+   - Course catalog with enrollment, difficulty badges, and progress tracking.
+   - Student dashboard showing active courses, progress %, quiz average, and "Resume Lesson" shortcuts.
+6. Design: Clean, modern, distraction-free educational UI (dark/light friendly, polished typography, intuitive learning flow).
+
+This project was built with [Lovable](https://lovable.dev).
+
+**Live app**: https://sarathi-ai-pathfinder.lovable.app
+
+## Build with Lovable
+
+Continue developing this project in the [Lovable editor](https://lovable.dev/projects/ad1b1cd1-39d5-4d7c-848a-6baea3a43b04).
+
+- **Ship faster**: describe what you want to build and Lovable handles the code.
+- **Stay in sync**: every change made in Lovable is committed straight to this repository.
+- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
+
+## Development
+
+Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+
+```sh
+git clone <this-repository-url>
+cd <repository-name>
+npm i
+npm run dev
+```
+
+## Documents → courses
+
+Admins can upload a PDF / .txt / .md (research paper, book, article, magazine, notes) at
+`/admin/ingest`. Text is extracted in the browser (pdf.js), then `/api/course-gen` plans the
+outline and finishes each lesson using `GROQ_API_KEY` (model: `GROQ_MODEL`, default
+`openai/gpt-oss-120b`). Without a key it falls back to a structure-based outline. Scanned
+(image-only) PDFs need OCR first. Students pick Easy (Class 10) / Normal (Undergrad) / Pro
+(Graduate) in the chat bar; maths renders through KaTeX.
