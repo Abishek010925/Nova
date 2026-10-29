@@ -29,18 +29,18 @@ Key Deliverables for the initial build:
    - Student dashboard showing active courses, progress %, quiz average, and "Resume Lesson" shortcuts.
 6. Design: Clean, modern, distraction-free educational UI (dark/light friendly, polished typography, intuitive learning flow).
 
-This project was built with [Lovable](https://lovable.dev).
+This project was developed by Abishek Chaudhari.
+Github: https://github.com/abishek-c367
+LinkedIn: https://www.linkedin.com/in/abishek-chaudhari
 
-**Live app**: https://sarathi-ai-pathfinder.lovable.app
+**Live app**: https://nova-pka8.onrender.com/
 
-## Build with Lovable
+## Built with Copilot and Claude
 
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/ad1b1cd1-39d5-4d7c-848a-6baea3a43b04).
+Continue developing this project as per your imagination.
 
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
-
+- **Stay in sync**: ask for creating a branch to upload every changes made by you 
+- **Full ownership**: this code is yours. Clone it and change as per your desire.
 ## Development
 
 Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
