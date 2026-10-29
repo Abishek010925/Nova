@@ -16,7 +16,6 @@ import {
   simulatedJudge,
   splitConceptResponse,
   type TutorBlock,
-  type TutorHistoryItem,
   type TutorRequest,
 } from "@/lib/tutor-blocks";
 import type { TeachingStyle } from "@/lib/course-types";
@@ -36,24 +35,25 @@ function encodeEvent(event: StreamEvent) {
   return `${JSON.stringify(event)}\n`;
 }
 
-function historyText(history: TutorHistoryItem[]): string {
-  if (history.length === 0) return "(no prior turns yet)";
-  return history
-    .slice(-6)
-    .map((h) => `${h.role === "tutor" ? "Tutor" : "Student"}: ${h.text.slice(0, 300)}`)
-    .join("\n");
-}
-
 const EXCERPT_PROMPT_CHARS = 3200;
 
-/** Source-grounding note: when a lesson came from an uploaded document, the tutor must teach from it. */
-function sourceNote(lesson: TutorRequest["lesson"]): string {
-  if (!lesson.sourceExcerpt) return "";
+/** Ground each request in saved course notes, never in the archived conversation. */
+function courseNotes(body: TutorRequest): string {
+  const { lesson } = body;
   return [
-    "SOURCE EXCERPT (the uploaded document this lesson is built from). Teach from it, stay faithful to it, and do not invent facts, numbers or citations that it does not support.",
-    "If the student asks about something the excerpt does not cover, say so briefly and answer from general knowledge, flagged as such.",
-    `"""${lesson.sourceExcerpt.slice(0, EXCERPT_PROMPT_CHARS)}"""`,
-  ].join("\n");
+    `SAVED COURSE NOTES: Course: ${body.courseTitle}. Module: ${body.moduleTitle}. Lesson: ${lesson.title}.`,
+    `Lesson summary: ${lesson.intuition}`,
+    `Learning objectives: ${lesson.objectives.join("; ")}`,
+    `Concepts in course order: ${lesson.concepts.join("; ")}`,
+    lesson.sourceExcerpt
+      ? [
+          "SOURCE EXCERPT (teach faithfully from the uploaded document; do not invent facts, numbers or citations it does not support). If a question is outside this excerpt, say so and clearly label any general-knowledge answer.",
+          `"""${lesson.sourceExcerpt.slice(0, EXCERPT_PROMPT_CHARS)}"""`,
+        ].join("\n")
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function masteryNote(mastery: TutorRequest["mastery"]): string {
@@ -141,7 +141,7 @@ async function groqTeachConcept(
     `Teach ONLY this concept: "${concept}".`,
     `Style: depth=${teaching.depth}, tone=${teaching.tone}, pacing=${teaching.pacing}.`,
     "Explain the concept fully and clearly. Use as much detail as needed; do not cut off the explanation to meet a length limit.",
-    "Do not restate concepts already covered in the conversation history.",
+    "Focus only on the current concept and the saved course notes.",
     isFinal
       ? "This is the last concept in the lesson — a code example, diagram, and quiz will be shown right after your explanation, so do not write your own code block."
       : "After your explanation, on its own final line, write exactly: CHECK: <one short question that makes the student apply or restate this concept in their own words — never a yes/no question>.",
@@ -150,9 +150,7 @@ async function groqTeachConcept(
 
   const user = [
     `Course: ${body.courseTitle}. Module: ${body.moduleTitle}. Lesson: ${lesson.title}.`,
-    `Lesson objectives: ${lesson.objectives.join("; ")}.`,
-    sourceNote(lesson),
-    `Recent conversation:\n${historyText(body.history)}`,
+    courseNotes(body),
   ]
     .filter(Boolean)
     .join("\n");
@@ -204,8 +202,7 @@ async function groqAsk(
 
   const user = [
     `Course: ${body.courseTitle}. Module: ${body.moduleTitle}.`,
-    sourceNote(lesson),
-    `Recent conversation:\n${historyText(body.history)}`,
+    courseNotes(body),
     `Student question: ${body.question ?? ""}`,
   ]
     .filter(Boolean)
@@ -239,8 +236,7 @@ async function groqJudge(
 
   const user = [
     `Concept: ${concept}.`,
-    sourceNote(lesson),
-    `Recent conversation (includes how the concept was taught):\n${historyText(body.history)}`,
+    courseNotes(body),
     `Student's answer: ${body.answerText ?? ""}`,
   ]
     .filter(Boolean)
@@ -273,7 +269,6 @@ export const Route = createFileRoute("/api/tutor")({
           return new Response("Invalid tutor request", { status: 400 });
         }
         body.mastery = body.mastery ?? defaultMastery();
-        body.history = Array.isArray(body.history) ? body.history : [];
         body.level =
           body.level === "easy" || body.level === "pro" || body.level === "normal"
             ? body.level

@@ -21,9 +21,6 @@ export type TutorTurn = {
   pending?: boolean;
 };
 
-/** One tutor/student exchange, trimmed for sending back to the model as context. */
-export type TutorHistoryItem = { role: "tutor" | "student"; text: string };
-
 /** Rolling estimate of how well the student understands the current lesson. */
 export type MasterySignal = {
   /** 0 (struggling) .. 1 (confident) */
@@ -51,7 +48,6 @@ export type TutorRequest = {
   question?: string;
   /** Student's free-text answer to a checkin prompt — only used for mode "check". */
   answerText?: string;
-  history: TutorHistoryItem[];
   mastery: MasterySignal;
   /** Who the student is, i.e. how the tutor must pitch its language. */
   level: ExplainLevel;

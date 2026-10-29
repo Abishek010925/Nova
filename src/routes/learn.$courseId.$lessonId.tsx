@@ -102,6 +102,8 @@ function TutorWorkspace() {
     streaming,
     engine,
     engineDetail,
+    sessionLoaded,
+    persistenceError,
     conceptIndex,
     lessonDone,
     error,
@@ -111,24 +113,31 @@ function TutorWorkspace() {
     teachConcept,
     askQuestion,
     submitCheckin,
-    reset,
-  } = useTutorSession();
+  } = useTutorSession(`${courseId}/${lessonId}`);
   const [question, setQuestion] = useState("");
   const [answered, setAnswered] = useState<Record<string, boolean>>({});
   const streamEnd = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const started = useRef(false);
+  const lastAutoTaughtConcept = useRef(0);
   const finishRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (!course || !current) return;
     if (!enrollmentFor(course.id)) enroll(course.id);
     touchLesson(course.id, current.lessonId);
-    reset();
-    setAnswered({});
     started.current = false;
+    setAnswered({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, lessonId, hydrated]);
+
+  useEffect(() => {
+    if (!sessionLoaded) return;
+    started.current = turns.length > 0;
+    lastAutoTaughtConcept.current = conceptIndex;
+    // Restore the saved cursor once; later concept-index changes should trigger teaching.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionLoaded]);
 
   useEffect(() => {
     streamEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -144,7 +153,9 @@ function TutorWorkspace() {
 
   // Teach each new concept automatically once the previous check-in is passed.
   useEffect(() => {
-    if (!started.current || !course || !current) return;
+    if (!sessionLoaded || !started.current || !course || !current) return;
+    if (conceptIndex === lastAutoTaughtConcept.current) return;
+    lastAutoTaughtConcept.current = conceptIndex;
     if (lessonDone) return;
     teachConcept(
       {
@@ -250,7 +261,13 @@ function TutorWorkspace() {
     <div className="absolute inset-0 flex flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl px-4 pt-4 pb-8 sm:px-6">
-          {!hasTurns && !streaming && (
+          {!sessionLoaded && (
+            <div className="flex min-h-[55vh] items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> Restoring your conversation…
+            </div>
+          )}
+
+          {sessionLoaded && !hasTurns && !streaming && (
             <div className="flex min-h-[55vh] flex-col items-center justify-center text-center">
               <span className="grid size-11 place-items-center rounded-full bg-accent text-primary">
                 <Sparkles className="size-5" />
@@ -261,9 +278,9 @@ function TutorWorkspace() {
               </Rich>
               <p className="mt-3 max-w-md text-xs text-muted-foreground">
                 {lesson.concepts.length} concepts, one at a time · about {lesson.minutes} min
-                {lesson.sourceRef ? ` · from ${lesson.sourceRef} of the source` : ""}.
-                I'll explain at <strong>{levelMeta.label}</strong> level ({levelMeta.audience}) —
-                change it any time below.
+                {lesson.sourceRef ? ` · from ${lesson.sourceRef} of the source` : ""}. I'll explain
+                at <strong>{levelMeta.label}</strong> level ({levelMeta.audience}) — change it any
+                time below.
               </p>
               <Button className="mt-5" size="lg" onClick={startLesson}>
                 Start lesson
@@ -322,7 +339,9 @@ function TutorWorkspace() {
 
             {lessonDone && !streaming && (
               <div className="rounded-2xl border border-primary/30 bg-accent/40 p-5 text-center">
-                <p className="font-serif text-lg font-semibold">You've reached the end of this lesson</p>
+                <p className="font-serif text-lg font-semibold">
+                  You've reached the end of this lesson
+                </p>
                 <p className="mt-1 text-sm text-muted-foreground">
                   Ask anything below if something is still fuzzy, or move on when you're ready.
                 </p>
@@ -337,6 +356,11 @@ function TutorWorkspace() {
           {error && (
             <p className="mt-4 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
               {error}
+            </p>
+          )}
+          {persistenceError && (
+            <p className="mt-4 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+              {persistenceError}
             </p>
           )}
           <div ref={streamEnd} />
@@ -356,10 +380,14 @@ function TutorWorkspace() {
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             placeholder={
-              hasTurns ? "Ask Sarathi anything about this lesson…" : "Start the lesson to ask questions…"
+              !sessionLoaded
+                ? "Restoring your conversation…"
+                : hasTurns
+                  ? "Ask Sarathi anything about this lesson…"
+                  : "Start the lesson to ask questions…"
             }
             rows={1}
-            disabled={!hasTurns}
+            disabled={!sessionLoaded || !hasTurns}
             aria-label="Message Sarathi"
             className="block max-h-44 w-full resize-none bg-transparent px-3 py-2 text-[15px] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
             onKeyDown={(e) => {

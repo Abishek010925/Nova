@@ -60,3 +60,8 @@ outline and finishes each lesson using `GROQ_API_KEY` (model: `GROQ_MODEL`, defa
 `openai/gpt-oss-120b`). Without a key it falls back to a structure-based outline. Scanned
 (image-only) PDFs need OCR first. Students pick Easy (Class 10) / Normal (Undergrad) / Pro
 (Graduate) in the chat bar; maths renders through KaTeX.
+
+Tutor conversations are saved in the current browser's IndexedDB per course lesson, so students
+can return to the same browser and continue later. Archived chat is shown in the UI but is not
+sent back to the AI; tutor requests use the lesson's saved objectives, concepts, and source excerpt
+as course notes. Conversations are not synced across browsers or devices.

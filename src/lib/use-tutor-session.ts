@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   defaultMastery,
@@ -7,10 +7,10 @@ import {
   type ConceptOutcome,
   type MasterySignal,
   type TutorBlock,
-  type TutorHistoryItem,
   type TutorRequest,
   type TutorTurn,
 } from "./tutor-blocks";
+import { isTutorTurn, loadTutorSession, saveTutorSession } from "./tutor-session-storage";
 
 type StreamEvent =
   | { type: "meta"; engine: string; detail?: string }
@@ -28,31 +28,17 @@ type BaseRequest = {
 
 const AUTO_ADVANCE_DELAY_MS = 900;
 
-function blockToHistoryText(block: TutorBlock): string | null {
-  if (block.kind === "text") return block.markdown;
-  if (block.kind === "checkin") return `(asked: ${block.prompt})`;
-  if (block.kind === "code") return "[shared a code example]";
-  if (block.kind === "mermaid") return "[shared a diagram]";
-  if (block.kind === "quiz") return `(checkpoint: ${block.question.prompt})`;
-  return null;
-}
-
-function turnToHistoryItem(turn: TutorTurn): TutorHistoryItem | null {
-  const text = turn.blocks
-    .map(blockToHistoryText)
-    .filter((t): t is string => !!t)
-    .join(" ")
-    .slice(0, 400);
-  if (!text) return null;
-  return { role: turn.author, text };
-}
-
-export function useTutorSession() {
+export function useTutorSession(sessionId: string) {
+  const activeSessionId = useRef(sessionId);
+  activeSessionId.current = sessionId;
   const [turns, setTurns] = useState<TutorTurn[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [engine, setEngine] = useState<string>("simulated");
   const [engineDetail, setEngineDetail] = useState<string | undefined>(undefined);
   const [conceptIndex, setConceptIndex] = useState(0);
+  const [sessionLoaded, setSessionLoaded] = useState(false);
+  const [loadedSessionId, setLoadedSessionId] = useState("");
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [lessonDone, setLessonDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [outcomes, setOutcomes] = useState<ConceptOutcome[]>([]);
@@ -61,28 +47,115 @@ export function useTutorSession() {
 
   const hintedConcepts = useRef<Set<number>>(new Set());
   const busy = useRef(false);
+  const activeController = useRef<AbortController | null>(null);
   const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Mirrors activeCheckinId so the stable runRequest callback can read the latest
   // "which checkin is awaiting an answer" value without needing to be re-created.
   const activeCheckinIdRef = useRef<string | null>(null);
 
-  const mastery: MasterySignal = useMemo(
-    () => (outcomes.length === 0 ? defaultMastery() : deriveMastery(outcomes)),
-    [outcomes],
-  );
-
-  const reset = useCallback(() => {
-    if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
+  useEffect(() => {
+    let active = true;
+    activeController.current?.abort();
+    activeController.current = null;
+    busy.current = false;
+    setStreaming(false);
+    setSessionLoaded(false);
+    setLoadedSessionId("");
+    setPersistenceError(null);
+    setError(null);
     setTurns([]);
+    setEngine("simulated");
+    setEngineDetail(undefined);
     setConceptIndex(0);
     setLessonDone(false);
-    setError(null);
     setOutcomes([]);
     setCheckinResults({});
     setActiveCheckinId(null);
     activeCheckinIdRef.current = null;
-    hintedConcepts.current = new Set();
-  }, []);
+    busy.current = false;
+    if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
+    hintedConcepts.current.clear();
+
+    void loadTutorSession(sessionId)
+      .then((saved) => {
+        if (!active) return;
+        if (saved) {
+          const restoredTurns = Array.isArray(saved.turns) ? saved.turns.filter(isTutorTurn) : [];
+          setTurns(restoredTurns.map((turn) => ({ ...turn, pending: false })));
+          setEngine(saved.engine || "simulated");
+          setEngineDetail(saved.engineDetail);
+          setConceptIndex(
+            Number.isInteger(saved.conceptIndex) ? Math.max(0, saved.conceptIndex) : 0,
+          );
+          setLessonDone(saved.lessonDone === true);
+          setOutcomes(Array.isArray(saved.outcomes) ? saved.outcomes : []);
+          const savedResults = saved.checkinResults;
+          setCheckinResults(savedResults && typeof savedResults === "object" ? savedResults : {});
+          const checkinId =
+            typeof saved.activeCheckinId === "string" ? saved.activeCheckinId : null;
+          setActiveCheckinId(checkinId);
+          activeCheckinIdRef.current = checkinId;
+          hintedConcepts.current = new Set(
+            Array.isArray(saved.hintedConcepts) ? saved.hintedConcepts : [],
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        console.error("[tutor-session] Could not restore chat history:", error);
+        setPersistenceError("Previous chat history could not be loaded in this browser.");
+      })
+      .finally(() => {
+        if (active) {
+          setLoadedSessionId(sessionId);
+          setSessionLoaded(true);
+        }
+      });
+
+    return () => {
+      active = false;
+      activeController.current?.abort();
+      activeController.current = null;
+      busy.current = false;
+      if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
+    };
+  }, [sessionId]);
+
+  const mastery: MasterySignal = useMemo(
+    () => (outcomes.length === 0 ? defaultMastery() : deriveMastery(outcomes)),
+    [outcomes],
+  );
+  const isSessionReady = sessionLoaded && loadedSessionId === sessionId;
+
+  useEffect(() => {
+    if (!isSessionReady || streaming) return;
+    void saveTutorSession(sessionId, {
+      turns: turns.filter((turn) => !turn.pending),
+      conceptIndex,
+      lessonDone,
+      outcomes,
+      checkinResults,
+      activeCheckinId,
+      hintedConcepts: [...hintedConcepts.current],
+      engine,
+      ...(engineDetail ? { engineDetail } : {}),
+    }).catch((error: unknown) => {
+      console.error("[tutor-session] Could not save chat history:", error);
+      setPersistenceError("Chat history could not be saved in this browser.");
+    });
+  }, [
+    activeCheckinId,
+    checkinResults,
+    conceptIndex,
+    engine,
+    engineDetail,
+    isSessionReady,
+    lessonDone,
+    outcomes,
+    sessionId,
+    streaming,
+    turns,
+  ]);
 
   const setActiveCheckin = useCallback((id: string | null) => {
     activeCheckinIdRef.current = id;
@@ -93,6 +166,9 @@ export function useTutorSession() {
     async (req: TutorRequest, opts?: { echoStudentText?: string }) => {
       if (busy.current) return;
       busy.current = true;
+      const requestSessionId = sessionId;
+      const controller = new AbortController();
+      activeController.current = controller;
       setError(null);
       setStreaming(true);
 
@@ -116,6 +192,7 @@ export function useTutorSession() {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(req),
+          signal: controller.signal,
         });
         if (!res.ok || !res.body) throw new Error(`Tutor unavailable (${res.status})`);
 
@@ -127,6 +204,7 @@ export function useTutorSession() {
         for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
+          if (activeSessionId.current !== requestSessionId) return;
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
@@ -184,23 +262,19 @@ export function useTutorSession() {
           setActiveCheckin(lastCheckinId);
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : "The tutor could not respond.");
-        setTurns((t) => t.filter((turn) => turn.id !== turnId));
+        if (requestSessionId === activeSessionId.current && !controller.signal.aborted) {
+          setError(e instanceof Error ? e.message : "The tutor could not respond.");
+          setTurns((t) => t.filter((turn) => turn.id !== turnId));
+        }
       } finally {
-        busy.current = false;
-        setStreaming(false);
+        if (activeController.current === controller) {
+          activeController.current = null;
+          busy.current = false;
+          setStreaming(false);
+        }
       }
     },
-    [setActiveCheckin],
-  );
-
-  const historyForRequest = useCallback(
-    () =>
-      turns
-        .map(turnToHistoryItem)
-        .filter((h): h is TutorHistoryItem => !!h)
-        .slice(-6),
-    [turns],
+    [sessionId, setActiveCheckin],
   );
 
   const teachConcept = useCallback(
@@ -208,22 +282,21 @@ export function useTutorSession() {
       void runRequest({
         mode: "concept",
         conceptIndex: index,
-        history: historyForRequest(),
         mastery,
         ...base,
       });
     },
-    [historyForRequest, mastery, runRequest],
+    [mastery, runRequest],
   );
 
   const askQuestion = useCallback(
     (base: BaseRequest, question: string) => {
       void runRequest(
-        { mode: "ask", conceptIndex, question, history: historyForRequest(), mastery, ...base },
+        { mode: "ask", conceptIndex, question, mastery, ...base },
         { echoStudentText: question },
       );
     },
-    [conceptIndex, historyForRequest, mastery, runRequest],
+    [conceptIndex, mastery, runRequest],
   );
 
   const submitCheckin = useCallback(
@@ -234,18 +307,19 @@ export function useTutorSession() {
           conceptIndex,
           answerText: text,
           hinted: hintedConcepts.current.has(conceptIndex),
-          history: historyForRequest(),
           mastery,
           ...base,
         },
         { echoStudentText: text },
       );
     },
-    [conceptIndex, historyForRequest, mastery, runRequest],
+    [conceptIndex, mastery, runRequest],
   );
 
   return {
-    turns,
+    turns: isSessionReady ? turns : [],
+    sessionLoaded: isSessionReady,
+    persistenceError,
     streaming,
     engine,
     engineDetail,
@@ -258,6 +332,5 @@ export function useTutorSession() {
     teachConcept,
     askQuestion,
     submitCheckin,
-    reset,
   };
 }
