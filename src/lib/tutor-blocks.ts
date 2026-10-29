@@ -1,5 +1,4 @@
 import type { ExplainLevel, Lesson, QuizQuestion, TeachingStyle } from "./course-types";
-import { closeOpenMath } from "./math";
 
 export type CheckinBlock = {
   id: string;
@@ -112,21 +111,6 @@ export function adaptTeachingStyle(base: TeachingStyle, mastery: MasterySignal):
   };
 }
 
-/** How many words a single explanation should target, given the live pace. */
-export function wordBudget(pacing: TeachingStyle["pacing"], level: ExplainLevel = "normal"): number {
-  const base = pacing === "brisk" ? 55 : pacing === "slow" ? 130 : 90;
-  // Plain-language explanations need more words (analogies); formal ones carry more per word.
-  return Math.round(base * (level === "easy" ? 1.3 : level === "pro" ? 1.15 : 1));
-}
-
-export function capWords(text: string, max: number): string {
-  const trimmed = text.trim();
-  const words = trimmed.split(/\s+/);
-  if (words.length <= max) return trimmed;
-  // Never cut a formula in half: drop a dangling `$…` opener rather than render it broken.
-  return `${closeOpenMath(words.slice(0, max).join(" "))}…`;
-}
-
 /** The instruction block that makes the model write for the chosen audience. */
 export function levelInstruction(level: ExplainLevel): string {
   if (level === "easy") {
@@ -154,7 +138,11 @@ export const MATH_RULE =
   "MATH FORMAT: write every formula in LaTeX using $...$ for inline maths and $$...$$ on their own lines for display maths. Never use \\( \\), \\[ \\], plain-text maths, or Unicode superscripts for formulas.";
 
 export function levelLabel(level: ExplainLevel): string {
-  return level === "easy" ? "Easy (Class 10)" : level === "pro" ? "Pro (Graduate)" : "Normal (Undergrad)";
+  return level === "easy"
+    ? "Easy (Class 10)"
+    : level === "pro"
+      ? "Pro (Graduate)"
+      : "Normal (Undergrad)";
 }
 
 /** Sentences from the lesson's source text that mention the concept — used by the built-in tutor. */
@@ -309,7 +297,6 @@ export function simulatedConceptTeach(req: TutorRequest, teaching: TeachingStyle
   const { lesson, conceptIndex } = req;
   const concept = lesson.concepts[conceptIndex] ?? lesson.title;
   const isFinal = conceptIndex >= lesson.concepts.length - 1;
-  const budget = wordBudget(teaching.pacing, req.level);
   const fromSource = excerptSnippet(lesson, concept, req.level === "pro" ? 2 : 1);
   const framing =
     req.level === "easy"
@@ -325,9 +312,7 @@ export function simulatedConceptTeach(req: TutorRequest, teaching: TeachingStyle
         ? `Next up: **${concept}**. Before I explain — what would you expect happens here, based on what we just covered?`
         : `Next up: **${concept}**. ${teaching.pacing === "slow" ? "Let's slow down and build this one carefully." : framing}${fromSource ? ` ${fromSource}` : ""}`;
 
-  const blocks: TutorBlock[] = [
-    { id: nextId(), kind: "text", markdown: capWords(opening, budget) },
-  ];
+  const blocks: TutorBlock[] = [{ id: nextId(), kind: "text", markdown: opening }];
 
   if (isFinal) {
     blocks.push(...finalConceptExtras(lesson, teaching));
@@ -351,14 +336,11 @@ export function simulatedConceptTeach(req: TutorRequest, teaching: TeachingStyle
   return blocks;
 }
 
-export function simulatedAsk(req: TutorRequest, teaching: TeachingStyle): TutorBlock[] {
+export function simulatedAsk(req: TutorRequest): TutorBlock[] {
   const { lesson, conceptIndex } = req;
   const concept = lesson.concepts[conceptIndex] ?? lesson.concepts[0] ?? lesson.title;
   const question = (req.question ?? "").trim();
-  const markdown = capWords(
-    `On "${question || lesson.title}": the centre of gravity is **${concept}**. ${lesson.intuition} Tie your question back to what must be true for ${concept.toLowerCase()} to hold — that's usually where the confusion lives.`,
-    wordBudget(teaching.pacing, req.level),
-  );
+  const markdown = `On "${question || lesson.title}": the centre of gravity is **${concept}**. ${lesson.intuition} Tie your question back to what must be true for ${concept.toLowerCase()} to hold — that's usually where the confusion lives.`;
   return [{ id: nextId(), kind: "text", markdown }];
 }
 

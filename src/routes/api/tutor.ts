@@ -2,7 +2,6 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import {
   adaptTeachingStyle,
-  capWords,
   defaultMastery,
   fallbackCheckPrompt,
   finalConceptExtras,
@@ -16,7 +15,6 @@ import {
   simulatedConceptTeach,
   simulatedJudge,
   splitConceptResponse,
-  wordBudget,
   type TutorBlock,
   type TutorHistoryItem,
   type TutorRequest,
@@ -60,10 +58,10 @@ function sourceNote(lesson: TutorRequest["lesson"]): string {
 
 function masteryNote(mastery: TutorRequest["mastery"]): string {
   if (mastery.streak >= 2) {
-    return `The student is on a ${mastery.streak}-answer correct streak — they're moving fast. Keep this brief, skip basic scaffolding, don't over-explain.`;
+    return `The student is on a ${mastery.streak}-answer correct streak — they're moving fast. Skip basic scaffolding, but fully explain the current idea.`;
   }
   if (mastery.streak <= -2) {
-    return `The student has struggled on the last ${Math.abs(mastery.streak)} check-ins. Slow down, use one concrete example, keep the tone warm and encouraging, and avoid jargon.`;
+    return `The student has struggled on the last ${Math.abs(mastery.streak)} check-ins. Slow down, use concrete examples, keep the tone warm and encouraging, and avoid jargon.`;
   }
   return "The student's understanding so far looks about average for this point in the lesson — keep a steady, clear pace.";
 }
@@ -90,26 +88,29 @@ async function callGroq(
   const model = process.env["GROQ_MODEL"] || DEFAULT_GROQ_MODEL;
   const isReasoningModel = /gpt-oss|qwen3/i.test(model);
 
-  const res = await fetch(`${process.env["GROQ_BASE_URL"] || "https://api.groq.com/openai/v1"}/chat/completions`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      temperature: opts?.json ? 0.2 : 0.4,
-      ...(opts?.json ? { response_format: { type: "json_object" } } : {}),
-      // GPT-OSS (and Qwen3) are reasoning models on Groq: without these, the
-      // model's chain-of-thought can end up mixed into `message.content`
-      // instead of the final answer, which is the most common cause of this
-      // route silently looking "broken" even with a valid key.
-      ...(isReasoningModel
-        ? { reasoning_effort: opts?.reasoningEffort ?? "low", reasoning_format: "hidden" }
-        : {}),
-    }),
-  });
+  const res = await fetch(
+    `${process.env["GROQ_BASE_URL"] || "https://api.groq.com/openai/v1"}/chat/completions`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        temperature: opts?.json ? 0.2 : 0.4,
+        ...(opts?.json ? { response_format: { type: "json_object" } } : {}),
+        // GPT-OSS (and Qwen3) are reasoning models on Groq: without these, the
+        // model's chain-of-thought can end up mixed into `message.content`
+        // instead of the final answer, which is the most common cause of this
+        // route silently looking "broken" even with a valid key.
+        ...(isReasoningModel
+          ? { reasoning_effort: opts?.reasoningEffort ?? "low", reasoning_format: "hidden" }
+          : {}),
+      }),
+    },
+  );
 
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
@@ -131,7 +132,6 @@ async function groqTeachConcept(
   const { lesson, conceptIndex } = body;
   const concept = lesson.concepts[conceptIndex] ?? lesson.title;
   const isFinal = conceptIndex >= lesson.concepts.length - 1;
-  const budget = wordBudget(teaching.pacing, body.level);
 
   const system = [
     "You are Sarathi, a warm, precise 1:1 tutor teaching ONE concept at a time.",
@@ -140,7 +140,7 @@ async function groqTeachConcept(
     "Never introduce or explain any concept other than the single one you are given.",
     `Teach ONLY this concept: "${concept}".`,
     `Style: depth=${teaching.depth}, tone=${teaching.tone}, pacing=${teaching.pacing}.`,
-    `Hard limit: at most ${budget} words, plain prose, no headers, at most one short paragraph.`,
+    "Explain the concept fully and clearly. Use as much detail as needed; do not cut off the explanation to meet a length limit.",
     "Do not restate concepts already covered in the conversation history.",
     isFinal
       ? "This is the last concept in the lesson — a code example, diagram, and quiz will be shown right after your explanation, so do not write your own code block."
@@ -159,7 +159,7 @@ async function groqTeachConcept(
 
   const raw = await callGroq(apiKey, system, user, { reasoningEffort: "low" });
   const { explanation, checkPrompt } = splitConceptResponse(raw);
-  const blocks = parseModelMarkdown(capWords(explanation, budget));
+  const blocks = parseModelMarkdown(explanation);
 
   if (isFinal) {
     blocks.push(...finalConceptExtras(lesson, teaching));
@@ -189,7 +189,6 @@ async function groqAsk(
 ): Promise<TutorBlock[]> {
   const { lesson, conceptIndex } = body;
   const concept = lesson.concepts[conceptIndex] ?? lesson.concepts[0] ?? lesson.title;
-  const budget = wordBudget(teaching.pacing, body.level);
 
   const system = [
     "You are Sarathi, a warm, precise 1:1 tutor.",
@@ -197,7 +196,7 @@ async function groqAsk(
     MATH_RULE,
     `The student is currently focused on the concept "${concept}" within the lesson "${lesson.title}".`,
     `Style: depth=${teaching.depth}, tone=${teaching.tone}, pacing=${teaching.pacing}.`,
-    `Answer their question directly in at most ${budget} words.`,
+    "Answer their question directly and completely. Use as much detail as needed; do not cut off the explanation to meet a length limit.",
     "Markdown is fine; use a fenced code block only if a short example genuinely helps, and a `mermaid` fenced block only if a diagram genuinely helps.",
     "If their question reveals a misunderstanding, gently correct it before answering.",
     masteryNote(body.mastery),
@@ -214,7 +213,7 @@ async function groqAsk(
 
   const raw = await callGroq(apiKey, system, user, { reasoningEffort: "low" });
   const answer = splitConceptResponse(raw).explanation || raw;
-  const blocks = parseModelMarkdown(capWords(answer, budget));
+  const blocks = parseModelMarkdown(answer);
   return blocks.length > 0 ? blocks : [{ id: nextId(), kind: "text", markdown: raw }];
 }
 
@@ -329,7 +328,7 @@ export const Route = createFileRoute("/api/tutor")({
           if (body.mode === "concept") {
             blocks = simulatedConceptTeach(body, teaching);
           } else if (body.mode === "ask") {
-            blocks = simulatedAsk(body, teaching);
+            blocks = simulatedAsk(body);
           } else {
             const { understood, feedback } = simulatedJudge(
               body.lesson,
