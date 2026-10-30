@@ -45,7 +45,7 @@ export async function openRouterText(
   await waitForRequestSlot();
 
   const controller = new AbortController();
-  const timeoutMs = opts.timeoutMs ?? 45_000;
+  const timeoutMs = opts.timeoutMs ?? 120_000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
