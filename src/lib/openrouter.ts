@@ -7,7 +7,15 @@ type OpenRouterOptions = {
 };
 
 type ChatCompletionResponse = {
-  choices?: Array<{ message?: { content?: string | null } }>;
+  choices?: Array<{
+    finish_reason?: string | null;
+    message?: { content?: string | null };
+  }>;
+  provider?: string;
+  usage?: {
+    completion_tokens?: number;
+    completion_tokens_details?: { reasoning_tokens?: number };
+  };
 };
 
 let nextRequestAt = 0;
@@ -41,59 +49,74 @@ export async function openRouterText(
   const apiKey = process.env["OPENROUTER_API_KEY"];
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");
 
-  // Keep this process below the free-model limit of 20 requests per minute.
-  await waitForRequestSlot();
-
-  const controller = new AbortController();
   const timeoutMs = opts.timeoutMs ?? 120_000;
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let emptyResponseDetail = "no completion choices";
 
-  try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: NEMOTRON_MODEL,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        temperature: opts.json ? 0.2 : 0.4,
-        max_tokens: opts.maxTokens ?? 3500,
-        ...(opts.json ? { response_format: { type: "json_object" } } : {}),
-      }),
-      signal: controller.signal,
-    });
+  for (const effort of ["low", "minimal"] as const) {
+    // Keep this process below the free-model limit of 20 requests per minute.
+    await waitForRequestSlot();
 
-    const responseText = await response.text();
-    if (!response.ok) {
-      throw new Error(
-        `OpenRouter ${NEMOTRON_MODEL} request failed (${response.status}): ${responseText.slice(0, 400)}`,
-      );
-    }
-
-    let payload: ChatCompletionResponse;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      payload = JSON.parse(responseText) as ChatCompletionResponse;
-    } catch {
-      throw new Error("OpenRouter returned an invalid chat-completion response");
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: NEMOTRON_MODEL,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          temperature: opts.json ? 0.2 : 0.4,
+          max_tokens: opts.maxTokens ?? 3500,
+          reasoning: { effort, exclude: true },
+          ...(opts.json ? { response_format: { type: "json_object" } } : {}),
+        }),
+        signal: controller.signal,
+      });
+
+      const responseText = await response.text();
+      if (!response.ok) {
+        throw new Error(
+          `OpenRouter ${NEMOTRON_MODEL} request failed (${response.status}): ${responseText.slice(0, 400)}`,
+        );
+      }
+
+      let payload: ChatCompletionResponse;
+      try {
+        payload = JSON.parse(responseText) as ChatCompletionResponse;
+      } catch {
+        throw new Error("OpenRouter returned an invalid chat-completion response");
+      }
+      const choice = payload.choices?.[0];
+      const content = choice?.message?.content;
+      if (typeof content === "string" && content.trim()) return content.trim();
+
+      const reasoningTokens = payload.usage?.completion_tokens_details?.reasoning_tokens;
+      emptyResponseDetail = [
+        `finish_reason=${choice?.finish_reason ?? "unknown"}`,
+        `reasoning_tokens=${reasoningTokens ?? "unknown"}`,
+        `completion_tokens=${payload.usage?.completion_tokens ?? "unknown"}`,
+        `provider=${payload.provider ?? "unknown"}`,
+        `reasoning_effort=${effort}`,
+      ].join(", ");
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error(`OpenRouter ${NEMOTRON_MODEL} request timed out after ${timeoutMs} ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    const content = payload.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || !content.trim()) {
-      throw new Error(`OpenRouter ${NEMOTRON_MODEL} returned no content`);
-    }
-    return content.trim();
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error(`OpenRouter ${NEMOTRON_MODEL} request timed out after ${timeoutMs} ms`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
   }
+
+  throw new Error(
+    `OpenRouter ${NEMOTRON_MODEL} returned no visible content after low- and minimal-reasoning attempts (${emptyResponseDetail})`,
+  );
 }
 
 export async function openRouterJson<T>(
