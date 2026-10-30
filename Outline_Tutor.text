@@ -1,0 +1,224 @@
+How the website builds a course outline, and how that compares with the notebook
+===============================================================================
+
+Short answer
+------------
+
+They are related in purpose but do not use the same process. Both read document
+text, ask an AI to organize it, and produce structured learning material. The
+website builds a course made of modules and lessons, then separately writes
+lesson content and quizzes. The notebook reads PDF bookmarks as chapter/topic
+structure and asks for a chapter outline plus a three-sentence summary for each
+topic.
+
+Website flow: upload to editable course
+---------------------------------------
+
+1. The admin selects a PDF, TXT, or Markdown file on the "Create a course from a
+   document" page. A file can be up to 40 MB. Text may also be pasted directly.
+   The interface lets the admin create a new course or append modules to an
+   existing course, and choose whether the result is published or a draft.
+
+2. The browser extracts the text. For PDFs, PDF.js reads selectable text one
+   page at a time; it does not OCR image-only/scanned pages. Text files are read
+   directly. The extractor cleans line breaks and whitespace, then represents
+   the content as pages or paragraph groups. It stops extracting after the
+   configured 700,000-character limit.
+
+3. The pages are combined into consecutive, page-aware chunks of about 4,500
+   characters. Each chunk has an index and source-page range. The website does
+   not use PDF bookmarks to make its outline.
+
+4. Before calling the outline model, the browser makes a compact document map
+   covering all chunks. Each map entry contains the chunk number, page range,
+   up to four heading candidates detected with simple text patterns, and a
+   short snippet. The map has a 16,000-character budget, with at least 140
+   snippet characters reserved per chunk. This gives the outline model a skim
+   of the entire document, not the complete source text.
+
+5. The browser posts this map and metadata to `/api/course-gen` with the
+   `outline` action. The server calls OpenRouter's JSON chat-completions API.
+   The outline model is `nvidia/nemotron-3.5-super-vl:free`, configured in
+   `src/lib/openrouter.ts`.
+   The prompt asks the model to identify document type and organize the course
+   appropriately: for example, follow the chapters of a book or the
+   problem/method/results/limitations of a research paper.
+
+6. The model returns course metadata and a hierarchy of modules and lessons.
+   Each lesson includes a title, estimated minutes, plain-language intuition,
+   objectives, concepts, and a start/end chunk range. The prompt requires
+   lessons to be in document order and cover all chunks without gaps or overlap.
+
+7. The server sanitizes the model response: it limits text lengths and the
+   number of modules, lessons, objectives, and concepts; supplies defaults;
+   clamps lesson chunk ranges; and adjusts the ranges into sequential coverage.
+   An outline with no lessons is treated as an error.
+
+8. The browser then creates lesson content separately, one lesson at a time.
+   For each lesson, it gathers the corresponding chunk range and keeps up to
+   4,200 characters as the source excerpt. The server calls
+   `nvidia/nemotron-3.5-super-vl:free` through OpenRouter to refine the lesson
+   intuition, objectives, concepts, duration, and one multiple-choice quiz
+   question. This is a separate AI step from building the outline.
+
+9. If the Groq key is missing or outline generation fails, the website falls
+   back to a deterministic structure-based outline. It groups chunks, detects
+   likely headings with text patterns, supplements them with frequent key
+   terms, and creates modules and lessons. If individual lesson-generation
+   calls fail, the course retains the outline-level lesson content and reports
+   a warning.
+
+10. The finished course is stored in the app as modules and lessons. The admin
+    can review and edit it. Lessons keep their source excerpts and page
+    references so the teaching experience can be grounded in the uploaded
+    document.
+
+Notebook flow: chapter/topic analysis
+-------------------------------------
+
+1. The notebook reads a PDF using `pypdf`. Change `PDF_PATH` to use another
+   file. It requires selectable/extractable text; it does not OCR scanned pages.
+
+2. It reads the PDF's bookmark outline. Top-level chapter bookmarks define
+   chapter boundaries, and nested bookmarks become that chapter's expected
+   topic headings. For PDFs without usable chapter bookmarks, the user can
+   provide page ranges and optional topic names in `CHAPTER_RANGES`.
+
+3. It extracts the pages for each chapter. Text is submitted as a complete
+   chapter when it fits the configured character limit. A longer chapter is
+   split into overlapping character chunks and the partial results are merged.
+
+4. It sends the chapter text and expected topic titles directly to OpenRouter
+   using `nvidia/nemotron-3.5-super-vl:free`. The notebook obtains the API key
+   from `OPENROUTER_API_KEY` or a hidden prompt. This is not the website's Groq
+   model or API route.
+
+5. The prompt asks for JSON containing a chapter outline and topics. For each
+   topic, the model must provide exactly three concise summary sentences. When
+   bookmarks exist, it is asked to preserve and cover those topic titles;
+   otherwise, it infers topics from the chapter text.
+
+6. The notebook checks that the response has the expected JSON structure and
+   exactly three non-empty sentences per topic. Invalid structure is surfaced
+   rather than silently treated as a successful result. For chapters split
+   across chunks, it makes an additional consolidation request.
+
+7. It records per-request API token counts when provided, latency, time to first
+   token, observed output tokens per second and per minute, and approximate
+   input character counts. It also reports topic counts, sentence compliance,
+   and bookmark-topic coverage. It saves results as JSON and request metrics
+   as CSV.
+
+Key differences
+---------------
+
+- Input structure: the website makes its own text chunks and detects possible
+  headings from text. The notebook uses the PDF's actual bookmarks when
+  available.
+- Context given to the outline model: the website gives the outline model a
+  budgeted skim of the whole document, then sends a source excerpt separately
+  for each lesson. The notebook sends full chapter text (or chapter chunks)
+  for chapter-level analysis.
+- Output: the website produces a course hierarchy (course -> modules ->
+  lessons), learning objectives, concepts, and later quizzes. The notebook
+  produces chapter outlines and three-sentence summaries for topics.
+- Model/provider: course outlines and lesson enrichment on the website use
+  OpenRouter with `nvidia/nemotron-3.5-super-vl:free`. Live tutoring uses Groq
+  with `openai/gpt-oss-120b` as primary and Nemotron as fallback. The notebook
+  also uses OpenRouter with NVIDIA Nemotron.
+- Reliability behavior: the website has a structure-based fallback when AI
+  outline generation is unavailable. The notebook is an API analysis workflow
+  and reports request/validation failures; it does not build the website's
+  fallback course.
+- Performance metrics: the notebook captures request-level metrics. The
+  website's course-generation flow does not currently report comparable token
+  throughput metrics to the admin.
+
+Where to read the implementation
+--------------------------------
+
+- `src/routes/admin.ingest.tsx` — upload UI and course-creation flow.
+- `src/lib/doc-ingest.ts` — text extraction, chunking, document map, fallback
+  outline, AI outline call, and lesson assembly.
+- `src/routes/api/course-gen.ts` — server prompts, outline sanitization, and
+  lesson-generation request.
+- `src/lib/groq.ts` — the primary Groq model constant for live tutoring.
+- `src/lib/openrouter.ts` — OpenRouter Nemotron request helpers used by course
+  generation and the live tutor fallback.
+- `book_chapter_analysis.ipynb` — the separate PDF chapter/topic notebook.
+
+
+How live tutoring uses uploaded source text
+===========================================
+
+Short answer
+------------
+
+The website stores a reference excerpt with each generated lesson and includes
+that excerpt in live tutor requests. The text comes from the uploaded document;
+it is not individually hard-coded into the tutor. However, the current
+implementation is not RAG: it does not search the source document for passages
+relevant to each student question.
+
+Step by step
+------------
+
+1. **Extract text.** On upload, the browser extracts selectable PDF text page
+   by page (or reads TXT/Markdown). Image-only PDFs are not OCR'd by this flow.
+
+2. **Plan lesson ranges.** The text is split into sequential chunks. The
+   generated course outline assigns a range of chunks to every lesson.
+
+3. **Attach a fixed excerpt.** For each lesson, the app joins its assigned
+   chunks and stores up to 4,200 characters as `sourceExcerpt`. It also stores
+   the page location as `sourceRef`. The excerpt is the beginning of the joined
+   lesson text; it is not selected by searching for relevance to a topic or
+   question. See `src/lib/doc-ingest.ts`.
+
+4. **Persist the course in the browser.** The course and its lesson excerpts
+   are serialized into browser `localStorage` with the rest of the app state.
+   The original uploaded PDF is not saved by this flow. See
+   `src/lib/app-store.tsx`.
+
+5. **Send lesson context during tutoring.** The lesson page sends the current
+   lesson data to `/api/tutor`. The server constructs notes from the course,
+   module and lesson titles, the lesson summary, objectives, ordered concepts,
+   and up to 3,200 characters of the stored source excerpt. The tutor model is
+   instructed to teach faithfully from those notes and to identify when a
+   question is outside the excerpt. See `src/routes/api/tutor.ts`.
+
+6. **Persist the conversation separately.** Tutor turns and progress are stored
+   in browser IndexedDB so the learner can resume the session. The live prompt
+   is built from the current lesson data and current request; it does not
+   retrieve passages from a document database. See
+   `src/lib/tutor-session-storage.ts`.
+
+Is this hard-coded or RAG?
+--------------------------
+
+It is **lesson-attached reference text**: generated at course-creation time,
+stored with that lesson, then sent with each relevant live tutor request. It is
+not individual source content hard-coded into the tutor implementation,
+although manually authored lessons may provide their own lesson data.
+
+It is **not retrieval-augmented generation (RAG)**. The application does not
+create embeddings or a searchable document index, and it does not perform
+question-time semantic retrieval. Although ingestion uses chunks to plan
+lessons, the tutor receives a fixed excerpt for the current lesson rather than
+the most relevant source passages for the learner's particular question.
+
+Implementation files
+--------------------
+
+- `src/lib/doc-ingest.ts` — assigns chunk ranges and attaches excerpts/page
+  references to generated lessons.
+- `src/lib/course-types.ts` — defines the optional `sourceExcerpt` and
+  `sourceRef` lesson fields.
+- `src/lib/app-store.tsx` — persists the course state in browser localStorage.
+- `src/routes/learn.$courseId.$lessonId.tsx` and
+  `src/lib/use-tutor-session.ts` — send current lesson data to the tutor API.
+- `src/routes/api/tutor.ts` — builds model context from the fixed excerpt and
+  lesson notes; tries Groq GPT-OSS-120B first, then Nemotron if the Groq call
+  fails.
+- `src/lib/tutor-session-storage.ts` — persists tutor conversation/progress in
+  browser IndexedDB.

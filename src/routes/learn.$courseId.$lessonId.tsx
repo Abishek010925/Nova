@@ -477,7 +477,11 @@ function TutorWorkspace() {
                 title={engineDetail}
               >
                 <Cpu className="size-3" />
-                {engine === "groq" ? "Live AI tutor" : "Built-in tutor"}
+                {engine === "groq"
+                  ? "Live AI tutor"
+                  : engine === "openrouter"
+                    ? "Live AI tutor (Nemotron fallback)"
+                    : "Built-in tutor"}
               </span>
               <Button
                 type="submit"

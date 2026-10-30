@@ -1,12 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { groqJson, hasGroqKey, OUTLINE_MODEL, TUTOR_MODEL } from "@/lib/groq";
+import { hasOpenRouterKey, NEMOTRON_MODEL, openRouterJson } from "@/lib/openrouter";
 
 /**
  * Course generation from an uploaded document (text already extracted in the browser).
  *   action "outline" -> a full course outline mapped onto the document's chunks
  *   action "lesson"  -> the finished content for one lesson (summary, objectives, concepts, quiz)
- * Without GROQ_API_KEY these return { ok: false } and the client falls back to a
+ * Without OPENROUTER_API_KEY these return { ok: false } and the client falls back to a
  * structure-based outline, so uploading never dead-ends.
  */
 
@@ -124,10 +124,8 @@ async function buildOutline(body: {
     (body.map ?? "").slice(0, 22_000),
   ].join("\n");
 
-  const raw = await groqJson<RawOutline>(system, user, {
-    effort: "medium",
+  const raw = await openRouterJson<RawOutline>(system, user, {
     maxTokens: 12000,
-    model: OUTLINE_MODEL,
   });
   const outline = sanitizeOutline(raw, chunkCount);
   if (outline.modules.length === 0) throw new Error("Model returned an outline with no lessons");
@@ -164,10 +162,8 @@ async function buildLesson(body: {
     `SOURCE EXCERPT:\n"""${(body.excerpt ?? "").slice(0, 5000)}"""`,
   ].join("\n");
 
-  const raw = await groqJson<Record<string, unknown>>(system, user, {
-    effort: "low",
+  const raw = await openRouterJson<Record<string, unknown>>(system, user, {
     maxTokens: 1800,
-    model: TUTOR_MODEL,
   });
   const quizRaw = (raw["quiz"] ?? {}) as Record<string, unknown>;
   const options = strList(quizRaw["options"], 4, 220);
@@ -207,17 +203,26 @@ export const Route = createFileRoute("/api/course-gen")({
         } catch {
           return Response.json({ ok: false, reason: "Invalid JSON" }, { status: 400 });
         }
-        if (!hasGroqKey()) {
-          return Response.json({ ok: false, reason: "GROQ_API_KEY is not set on this server" });
-        }
         try {
           if (body["action"] === "outline") {
+            if (!hasOpenRouterKey()) {
+              return Response.json({
+                ok: false,
+                reason: "OPENROUTER_API_KEY is not set on this server",
+              });
+            }
             const outline = await buildOutline(body as Parameters<typeof buildOutline>[0]);
-            return Response.json({ ok: true, model: OUTLINE_MODEL, outline });
+            return Response.json({ ok: true, model: NEMOTRON_MODEL, outline });
           }
           if (body["action"] === "lesson") {
+            if (!hasOpenRouterKey()) {
+              return Response.json({
+                ok: false,
+                reason: "OPENROUTER_API_KEY is not set on this server",
+              });
+            }
             const lesson = await buildLesson(body as Parameters<typeof buildLesson>[0]);
-            return Response.json({ ok: true, lesson });
+            return Response.json({ ok: true, model: NEMOTRON_MODEL, lesson });
           }
           return Response.json({ ok: false, reason: "Unknown action" }, { status: 400 });
         } catch (e) {

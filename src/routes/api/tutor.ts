@@ -20,6 +20,7 @@ import {
 } from "@/lib/tutor-blocks";
 import type { QuizQuestion, TeachingStyle } from "@/lib/course-types";
 import { TUTOR_MODEL } from "@/lib/groq";
+import { hasOpenRouterKey, openRouterText } from "@/lib/openrouter";
 
 // GPT-OSS is a reasoning model, so reasoning_format/reasoning_effort apply here.
 
@@ -107,6 +108,7 @@ async function callGroq(
           ? { reasoning_effort: opts?.reasoningEffort ?? "low", reasoning_format: "hidden" }
           : {}),
       }),
+      signal: AbortSignal.timeout(45_000),
     },
   );
 
@@ -121,12 +123,57 @@ async function callGroq(
   return stripReasoningArtifacts(content);
 }
 
+async function callTutorModel(
+  system: string,
+  user: string,
+  opts?: { json?: boolean; reasoningEffort?: "low" | "medium" | "high" },
+): Promise<{ content: string; engine: "groq" | "openrouter" }> {
+  const groqKey = process.env["GROQ_API_KEY"];
+  let groqFailure: string | undefined;
+
+  if (groqKey) {
+    try {
+      return {
+        content: await callGroq(groqKey, system, user, opts),
+        engine: "groq",
+      };
+    } catch (error) {
+      groqFailure = error instanceof Error ? error.message : String(error);
+      console.warn("[api/tutor] Groq unavailable; trying NVIDIA Nemotron fallback:", groqFailure);
+    }
+  }
+
+  if (!hasOpenRouterKey()) {
+    throw new Error(
+      groqFailure
+        ? `${groqFailure}; OPENROUTER_API_KEY is not set for the fallback`
+        : "GROQ_API_KEY and OPENROUTER_API_KEY are not set",
+    );
+  }
+
+  try {
+    return {
+      content: await openRouterText(system, user, {
+        ...(opts?.json ? { json: true } : {}),
+        maxTokens: opts?.json ? 3500 : 5000,
+      }),
+      engine: "openrouter",
+    };
+  } catch (error) {
+    const fallbackFailure = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      groqFailure
+        ? `${groqFailure}; NVIDIA Nemotron fallback failed: ${fallbackFailure}`
+        : fallbackFailure,
+    );
+  }
+}
+
 /** Teach exactly one concept, ending (for non-final concepts) with a `CHECK:` line. */
-async function groqTeachConcept(
+async function aiTeachConcept(
   body: TutorRequest,
   teaching: TeachingStyle,
-  apiKey: string,
-): Promise<{ blocks: TutorBlock[] }> {
+): Promise<{ blocks: TutorBlock[]; engine: "groq" | "openrouter" }> {
   const { lesson, conceptIndex } = body;
   const concept = lesson.concepts[conceptIndex] ?? lesson.title;
   const isFinal = conceptIndex >= lesson.concepts.length - 1;
@@ -153,7 +200,7 @@ async function groqTeachConcept(
     .filter(Boolean)
     .join("\n");
 
-  const raw = await callGroq(apiKey, system, user, { reasoningEffort: "low" });
+  const { content: raw, engine } = await callTutorModel(system, user, { reasoningEffort: "low" });
   const { explanation, checkPrompt } = splitConceptResponse(raw);
   const blocks = parseModelMarkdown(explanation);
 
@@ -175,14 +222,13 @@ async function groqTeachConcept(
       prompt: checkPrompt ?? fallbackCheckPrompt(concept, lesson.objectives),
     });
   }
-  return { blocks };
+  return { blocks, engine };
 }
 
-async function groqAsk(
+async function aiAsk(
   body: TutorRequest,
   teaching: TeachingStyle,
-  apiKey: string,
-): Promise<TutorBlock[]> {
+): Promise<{ blocks: TutorBlock[]; engine: "groq" | "openrouter" }> {
   const { lesson, conceptIndex } = body;
   const concept = lesson.concepts[conceptIndex] ?? lesson.concepts[0] ?? lesson.title;
 
@@ -206,16 +252,18 @@ async function groqAsk(
     .filter(Boolean)
     .join("\n");
 
-  const raw = await callGroq(apiKey, system, user, { reasoningEffort: "low" });
+  const { content: raw, engine } = await callTutorModel(system, user, { reasoningEffort: "low" });
   const answer = splitConceptResponse(raw).explanation || raw;
   const blocks = parseModelMarkdown(answer);
-  return blocks.length > 0 ? blocks : [{ id: nextId(), kind: "text", markdown: raw }];
+  return {
+    blocks: blocks.length > 0 ? blocks : [{ id: nextId(), kind: "text", markdown: raw }],
+    engine,
+  };
 }
 
-async function groqJudge(
+async function aiJudge(
   body: TutorRequest,
-  apiKey: string,
-): Promise<{ understood: boolean; feedback: string }> {
+): Promise<{ understood: boolean; feedback: string; engine: "groq" | "openrouter" }> {
   const { lesson, conceptIndex } = body;
   const concept = lesson.concepts[conceptIndex] ?? lesson.title;
   const hinted = !!body.hinted;
@@ -240,20 +288,24 @@ async function groqJudge(
     .filter(Boolean)
     .join("\n");
 
-  const raw = await callGroq(apiKey, system, user, { json: true, reasoningEffort: "medium" });
+  const { content: raw, engine } = await callTutorModel(system, user, {
+    json: true,
+    reasoningEffort: "medium",
+  });
   const match = raw.match(/\{[\s\S]*\}/);
   if (!match) throw new Error(`No JSON in judge response: ${raw.slice(0, 200)}`);
   const parsed = JSON.parse(match[0]) as { understood?: unknown; feedback?: unknown };
   if (typeof parsed.understood !== "boolean" || typeof parsed.feedback !== "string") {
     throw new Error(`Malformed judge response: ${raw.slice(0, 200)}`);
   }
-  return { understood: parsed.understood, feedback: parsed.feedback };
+  return { understood: parsed.understood, feedback: parsed.feedback, engine };
 }
 
-async function groqQuiz(body: TutorRequest, apiKey: string): Promise<TutorBlock[]> {
+async function aiQuiz(
+  body: TutorRequest,
+): Promise<{ blocks: TutorBlock[]; engine: "groq" | "openrouter" }> {
   const concept = body.lesson.concepts[body.conceptIndex] ?? body.lesson.title;
-  const raw = await callGroq(
-    apiKey,
+  const { content: raw, engine } = await callTutorModel(
     [
       "You are writing a short checkpoint quiz for a student who has just studied one concept.",
       levelInstruction(body.level),
@@ -301,12 +353,15 @@ async function groqQuiz(body: TutorRequest, apiKey: string): Promise<TutorBlock[
       explanation: item["explanation"].trim().slice(0, 500),
     };
   });
-  return questions.map((question) => ({
-    id: nextId(),
-    kind: "quiz",
-    question,
-    advance: true,
-  }));
+  return {
+    blocks: questions.map((question) => ({
+      id: nextId(),
+      kind: "quiz" as const,
+      question,
+      advance: true,
+    })),
+    engine,
+  };
 }
 
 function simulatedQuiz(body: TutorRequest): TutorBlock[] {
@@ -432,18 +487,26 @@ export const Route = createFileRoute("/api/tutor")({
         let blocks: TutorBlock[] = [];
         let judgement: { correct: boolean; advance: boolean } | null = null;
 
-        if (!groqKey) {
-          engineDetail = "GROQ_API_KEY is not set on this server";
+        if (!groqKey && !hasOpenRouterKey()) {
+          engineDetail = "GROQ_API_KEY and OPENROUTER_API_KEY are not set on this server";
         } else {
           try {
             if (body.mode === "concept") {
-              blocks = (await groqTeachConcept(body, teaching, groqKey)).blocks;
+              const result = await aiTeachConcept(body, teaching);
+              blocks = result.blocks;
+              engine = result.engine;
             } else if (body.mode === "ask") {
-              blocks = await groqAsk(body, teaching, groqKey);
+              const result = await aiAsk(body, teaching);
+              blocks = result.blocks;
+              engine = result.engine;
             } else if (body.mode === "quiz") {
-              blocks = await groqQuiz(body, groqKey);
+              const result = await aiQuiz(body);
+              blocks = result.blocks;
+              engine = result.engine;
             } else {
-              const { understood, feedback } = await groqJudge(body, groqKey);
+              const result = await aiJudge(body);
+              engine = result.engine;
+              const { understood, feedback } = result;
               const advance = understood || !!body.hinted;
               blocks = [{ id: nextId(), kind: "text", markdown: feedback }];
               if (!advance) {
@@ -456,20 +519,19 @@ export const Route = createFileRoute("/api/tutor")({
               }
               judgement = { correct: understood, advance };
             }
-            engine = "groq";
           } catch (e) {
-            // This used to be swallowed silently — log it so it's visible in
-            // server logs (e.g. Render's Logs tab), and surface a short
-            // reason to the client too, instead of failing invisibly.
             const message = e instanceof Error ? e.message : String(e);
-            console.error("[api/tutor] Groq call failed, using built-in tutor instead:", message);
+            console.error(
+              "[api/tutor] AI providers failed, using built-in tutor instead:",
+              message,
+            );
             engineDetail = message;
             blocks = [];
             judgement = null;
           }
         }
 
-        if (engine !== "groq") {
+        if (engine !== "groq" && engine !== "openrouter") {
           if (body.mode === "concept") {
             blocks = simulatedConceptTeach(body, teaching);
           } else if (body.mode === "ask") {

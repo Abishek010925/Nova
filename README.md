@@ -3,6 +3,7 @@
 Build "Sarathi AI Tutor", an interactive full-stack AI-tutored course platform.
 
 Key Deliverables for the initial build:
+
 1. Navigation & Role Switcher:
    - Header with student & admin mode toggle (or role-based access with demo switcher for immediate testing), notifications, and user profile.
 2. Seed Data / Sample Courses:
@@ -13,10 +14,10 @@ Key Deliverables for the initial build:
 3. Student Interactive Tutor Workspace (Core Vertical Slice):
    - Interactive split/chat view for lessons:
      - Left/Main pane: AI Tutor conversation stream with typed rich blocks:
-       * Explanatory text & intuition breakdowns (Markdown)
-       * Code snippets with syntax highlighting and copy button
-       * Interactive dynamic Mermaid.js diagrams (flowcharts, sequence diagrams) rendered inline
-       * Interactive Checkpoint Quiz widgets (multiple choice or code prediction) with instant submit, grading feedback, and score tracking
+       - Explanatory text & intuition breakdowns (Markdown)
+       - Code snippets with syntax highlighting and copy button
+       - Interactive dynamic Mermaid.js diagrams (flowcharts, sequence diagrams) rendered inline
+       - Interactive Checkpoint Quiz widgets (multiple choice or code prediction) with instant submit, grading feedback, and score tracking
      - Right/Sidebar pane: Lesson objectives checklist, mastered concepts progress bar, lesson navigation (next/prev lesson), and course outline.
      - Simulated/Integrated streaming AI tutor engine supporting Groq API configuration (with fallback simulated intelligent responses so the app works immediately out of the box).
    - "Ask a free-form question" vs "Continue lesson" controls.
@@ -39,8 +40,9 @@ LinkedIn: https://www.linkedin.com/in/abishek-chaudhari
 
 Continue developing this project as per your imagination.
 
-- **Stay in sync**: ask for creating a branch to upload every changes made by you 
+- **Stay in sync**: ask for creating a branch to upload every changes made by you
 - **Full ownership**: this code is yours. Clone it and change as per your desire.
+
 ## Development
 
 Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
@@ -56,11 +58,15 @@ npm run dev
 
 Admins can upload a PDF / .txt / .md (research paper, book, article, magazine, notes) at
 `/admin/ingest`. Text is extracted in the browser (pdf.js), then `/api/course-gen` drafts
-chapter outlines with `openai/gpt-oss-20b` and lesson content with `openai/gpt-oss-120b`,
-using `GROQ_API_KEY`. Tutor explanations, quizzes, and tutoring also use
-`openai/gpt-oss-120b`. Without a key it falls back to a structure-based outline. Scanned
-(image-only) PDFs need OCR first. Students pick Easy (Class 10) / Normal (Undergrad) / Pro
-(Graduate) in the chat bar; maths renders through KaTeX.
+chapter outlines and lesson content with `nvidia/nemotron-3.5-super-vl:free`, using
+`OPENROUTER_API_KEY` (configure it as a server-side secret). Tutor explanations, quizzes, and tutoring use
+`openai/gpt-oss-120b` through Groq (`GROQ_API_KEY`) as the primary model, with the NVIDIA
+Nemotron model through OpenRouter as a fallback on request errors, rate limits, or timeouts.
+If neither provider is available, course outlines fall back to document structure and live
+tutoring uses the built-in tutor. The OpenRouter free model has its own request limits and is
+not a guaranteed-capacity service. Scanned (image-only) PDFs need OCR first. Students pick
+Easy (Class 10) / Normal (Undergrad) / Pro (Graduate) in the chat bar; maths renders through
+KaTeX.
 
 Tutor conversations are saved in the current browser's IndexedDB per course lesson, so students
 can return to the same browser and continue later. Archived chat is shown in the UI but is not
