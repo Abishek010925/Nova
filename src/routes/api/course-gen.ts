@@ -163,7 +163,7 @@ async function buildLesson(body: {
   ].join("\n");
 
   const raw = await openRouterJson<Record<string, unknown>>(system, user, {
-    maxTokens: 1800,
+    maxTokens: 6000,
   });
   const quizRaw = (raw["quiz"] ?? {}) as Record<string, unknown>;
   const options = strList(quizRaw["options"], 4, 220);

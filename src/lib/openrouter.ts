@@ -50,9 +50,12 @@ export async function openRouterText(
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");
 
   const timeoutMs = opts.timeoutMs ?? 120_000;
+  const initialMaxTokens = opts.maxTokens ?? 3500;
+  const retryMaxTokens = Math.min(12_000, initialMaxTokens * 2);
+  let maxTokens = initialMaxTokens;
   let emptyResponseDetail = "no completion choices";
 
-  for (const effort of ["low", "minimal"] as const) {
+  for (const [attempt, effort] of ["low", "minimal"].entries()) {
     // Keep this process below the free-model limit of 20 requests per minute.
     await waitForRequestSlot();
 
@@ -72,7 +75,7 @@ export async function openRouterText(
             { role: "user", content: user },
           ],
           temperature: opts.json ? 0.2 : 0.4,
-          max_tokens: opts.maxTokens ?? 3500,
+          max_tokens: maxTokens,
           reasoning: { effort, exclude: true },
           ...(opts.json ? { response_format: { type: "json_object" } } : {}),
         }),
@@ -94,16 +97,23 @@ export async function openRouterText(
       }
       const choice = payload.choices?.[0];
       const content = choice?.message?.content;
-      if (typeof content === "string" && content.trim()) return content.trim();
+      const finishReason = choice?.finish_reason;
+      if (typeof content === "string" && content.trim() && finishReason !== "length") {
+        return content.trim();
+      }
 
       const reasoningTokens = payload.usage?.completion_tokens_details?.reasoning_tokens;
       emptyResponseDetail = [
-        `finish_reason=${choice?.finish_reason ?? "unknown"}`,
+        `finish_reason=${finishReason ?? "unknown"}`,
         `reasoning_tokens=${reasoningTokens ?? "unknown"}`,
         `completion_tokens=${payload.usage?.completion_tokens ?? "unknown"}`,
         `provider=${payload.provider ?? "unknown"}`,
         `reasoning_effort=${effort}`,
+        `max_tokens=${maxTokens}`,
       ].join(", ");
+      if (finishReason === "length" && attempt === 0 && retryMaxTokens > maxTokens) {
+        maxTokens = retryMaxTokens;
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         throw new Error(`OpenRouter ${NEMOTRON_MODEL} request timed out after ${timeoutMs} ms`);
@@ -115,7 +125,7 @@ export async function openRouterText(
   }
 
   throw new Error(
-    `OpenRouter ${NEMOTRON_MODEL} returned no visible content after low- and minimal-reasoning attempts (${emptyResponseDetail})`,
+    `OpenRouter ${NEMOTRON_MODEL} returned no usable content after low- and minimal-reasoning attempts (${emptyResponseDetail})`,
   );
 }
 
