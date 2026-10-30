@@ -229,12 +229,35 @@
 .tutor-prose .katex-display {
   color: var(--color-foreground);
 }
+.tutor-prose .tutor-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--color-border);
+  border-radius: 0.65rem;
+}
 .tutor-prose table {
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 0.9rem;
 }
 .tutor-prose th,
 .tutor-prose td {
-  border: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  border-right: 1px solid var(--color-border);
   padding: 0.35rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+.tutor-prose th {
+  background-color: var(--color-muted);
+  font-weight: 600;
+}
+.tutor-prose tr:last-child td {
+  border-bottom: 0;
+}
+.tutor-prose th:last-child,
+.tutor-prose td:last-child {
+  border-right: 0;
 }

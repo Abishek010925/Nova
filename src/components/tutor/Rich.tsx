@@ -1,11 +1,19 @@
-import Markdown from "react-markdown";
+import Markdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
+import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
 import { normalizeMath } from "@/lib/math";
 
-const remarkPlugins = [[remarkMath, { singleDollarTextMath: true }]] as never;
+const remarkPlugins = [remarkGfm, [remarkMath, { singleDollarTextMath: true }]] as never;
 const rehypePlugins = [[rehypeKatex, { strict: "ignore", throwOnError: false }]] as never;
+const markdownComponents: Components = {
+  table: ({ children, ...props }) => (
+    <div className="tutor-table-wrap">
+      <table {...props}>{children}</table>
+    </div>
+  ),
+};
 
 /**
  * The one place tutor text is rendered. Every surface (explanations, quizzes,
@@ -14,7 +22,11 @@ const rehypePlugins = [[rehypeKatex, { strict: "ignore", throwOnError: false }]]
 export function Rich({ children, className }: { children: string; className?: string }) {
   return (
     <div className={className ?? "tutor-prose"}>
-      <Markdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
+      <Markdown
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
+        components={markdownComponents}
+      >
         {normalizeMath(children)}
       </Markdown>
     </div>
@@ -27,7 +39,7 @@ export function RichInline({ children }: { children: string }) {
     <Markdown
       remarkPlugins={remarkPlugins}
       rehypePlugins={rehypePlugins}
-      components={{ p: ({ children: c }) => <>{c}</> }}
+      components={{ ...markdownComponents, p: ({ children: c }) => <>{c}</> }}
     >
       {normalizeMath(children)}
     </Markdown>
