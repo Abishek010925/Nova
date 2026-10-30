@@ -51,11 +51,11 @@ export async function openRouterText(
 
   const timeoutMs = opts.timeoutMs ?? 120_000;
   const initialMaxTokens = opts.maxTokens ?? 3500;
-  const retryMaxTokens = Math.min(12_000, initialMaxTokens * 2);
+  const retryMaxTokens = Math.min(24_000, initialMaxTokens * 2);
   let maxTokens = initialMaxTokens;
   let emptyResponseDetail = "no completion choices";
 
-  for (const [attempt, effort] of ["low", "minimal"].entries()) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     // Keep this process below the free-model limit of 20 requests per minute.
     await waitForRequestSlot();
 
@@ -76,7 +76,7 @@ export async function openRouterText(
           ],
           temperature: opts.json ? 0.2 : 0.4,
           max_tokens: maxTokens,
-          reasoning: { effort, exclude: true },
+          reasoning: { enabled: false, exclude: true },
           ...(opts.json ? { response_format: { type: "json_object" } } : {}),
         }),
         signal: controller.signal,
@@ -108,11 +108,12 @@ export async function openRouterText(
         `reasoning_tokens=${reasoningTokens ?? "unknown"}`,
         `completion_tokens=${payload.usage?.completion_tokens ?? "unknown"}`,
         `provider=${payload.provider ?? "unknown"}`,
-        `reasoning_effort=${effort}`,
         `max_tokens=${maxTokens}`,
       ].join(", ");
       if (finishReason === "length" && attempt === 0 && retryMaxTokens > maxTokens) {
         maxTokens = retryMaxTokens;
+      } else {
+        break;
       }
     } catch (error) {
       if (controller.signal.aborted) {
@@ -125,7 +126,7 @@ export async function openRouterText(
   }
 
   throw new Error(
-    `OpenRouter ${NEMOTRON_MODEL} returned no usable content after low- and minimal-reasoning attempts (${emptyResponseDetail})`,
+    `OpenRouter ${NEMOTRON_MODEL} returned no usable content after retrying length-limited output with reasoning disabled (${emptyResponseDetail})`,
   );
 }
 
