@@ -1,5 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { AlertTriangle, CheckCircle2, FileText, Loader2, Sparkles, UploadCloud } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  FileText,
+  Loader2,
+  Sparkles,
+  UploadCloud,
+} from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -37,7 +44,8 @@ export const Route = createFileRoute("/admin/ingest")({
       { property: "og:title", content: "Create a course from a document — Sarathi AI Tutor" },
       {
         property: "og:description",
-        content: "Upload a PDF or text and get a complete course outline and lessons automatically.",
+        content:
+          "Upload a PDF or text and get a complete course outline and lessons automatically.",
       },
     ],
   }),
@@ -48,7 +56,13 @@ type Phase =
   | { kind: "idle" }
   | { kind: "working"; label: string; done: number; total: number }
   | { kind: "error"; message: string }
-  | { kind: "done"; course: Course; usedAi: boolean; warnings: string[]; appended: boolean };
+  | {
+      kind: "done";
+      course: Course;
+      usedAi: boolean;
+      warnings: string[];
+      appended: boolean;
+    };
 
 const NEW = "__new__";
 
@@ -83,20 +97,31 @@ function Ingest() {
         const result = await generateCourse(doc, { publish, onProgress });
         const appended = target !== NEW && courses.some((c) => c.id === target);
         if (appended) {
-          updateCourse(target, (c) => ({ ...c, modules: [...c.modules, ...result.course.modules] }));
+          updateCourse(target, (c) => ({
+            ...c,
+            modules: [...c.modules, ...result.course.modules],
+          }));
         } else {
           addCourse(result.course);
         }
-        toast.success(appended ? "Modules added to the course" : "Course created");
+        toast.success(appended ? "Modules added to the course" : "Course created", {
+          description: `Outline built with ${result.outlineModel}.`,
+          duration: 3000,
+        });
         setPhase({
           kind: "done",
-          course: appended ? (courses.find((c) => c.id === target) ?? result.course) : result.course,
+          course: appended
+            ? (courses.find((c) => c.id === target) ?? result.course)
+            : result.course,
           usedAi: result.usedAi,
           warnings: result.warnings,
           appended,
         });
       } catch (e) {
-        setPhase({ kind: "error", message: e instanceof Error ? e.message : "Something went wrong." });
+        setPhase({
+          kind: "error",
+          message: e instanceof Error ? e.message : "Something went wrong.",
+        });
       }
     },
     [addCourse, courses, publish, target, updateCourse],
@@ -229,7 +254,7 @@ function Ingest() {
             <span className="font-medium">{phase.course.title}</span> ·{" "}
             {phase.course.modules.length} modules ·{" "}
             {phase.course.modules.reduce((n, m) => n + m.lessons.length, 0)} lessons
-            {phase.usedAi ? "" : " · outline built from document structure (no AI key)"}
+            {phase.usedAi ? "" : " · outline built from document structure (native fallback)"}
           </p>
           {phase.warnings.map((w) => (
             <p key={w} className="mt-2 flex gap-2 text-xs text-muted-foreground">

@@ -58,15 +58,18 @@ npm run dev
 
 Admins can upload a PDF / .txt / .md (research paper, book, article, magazine, notes) at
 `/admin/ingest`. Text is extracted in the browser (pdf.js), then `/api/course-gen` drafts
-chapter outlines and lesson content with `nvidia/nemotron-3.5-super-vl:free`, using
-`OPENROUTER_API_KEY` (configure it as a server-side secret). Tutor explanations, quizzes, and tutoring use
+chapter outlines with `nvidia/nemotron-3.5-super-vl:free`, using `OPENROUTER_API_KEY` (configure it
+as a server-side secret). If Nemotron is unavailable or fails, outline generation tries Google's
+`gemini-3.5-flash-lite` using the server-side `GEMINI_API_KEY`. If both providers fail or are
+unconfigured, it builds the outline from the document structure. Lesson enrichment uses Nemotron
+only when Nemotron produced the outline; Gemini-built outlines keep their planned lesson content
+and source excerpts. Tutor explanations, quizzes, and tutoring use
 `openai/gpt-oss-120b` through Groq (`GROQ_API_KEY`) as the primary model, with the NVIDIA
 Nemotron model through OpenRouter as a fallback on request errors, rate limits, or timeouts.
-If neither provider is available, course outlines fall back to document structure and live
-tutoring uses the built-in tutor. The OpenRouter free model has its own request limits and is
-not a guaranteed-capacity service. Scanned (image-only) PDFs need OCR first. Students pick
-Easy (Class 10) / Normal (Undergrad) / Pro (Graduate) in the chat bar; maths renders through
-KaTeX.
+If neither tutor provider is available, live tutoring uses the built-in tutor. The OpenRouter free
+model has its own request limits and is not a guaranteed-capacity service. Scanned (image-only) PDFs
+need OCR first. Students pick Easy (Class 10) / Normal (Undergrad) / Pro (Graduate) in the chat bar;
+maths renders through KaTeX.
 
 Tutor conversations are saved in the current browser's IndexedDB per course lesson, so students
 can return to the same browser and continue later. Archived chat is shown in the UI but is not

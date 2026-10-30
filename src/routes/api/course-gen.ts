@@ -2,11 +2,13 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { hasOpenRouterKey, NEMOTRON_MODEL, openRouterJson } from "@/lib/openrouter";
 
+const GEMINI_OUTLINE_MODEL = "gemini-3.5-flash-lite";
+
 /**
  * Course generation from an uploaded document (text already extracted in the browser).
  *   action "outline" -> a full course outline mapped onto the document's chunks
  *   action "lesson"  -> the finished content for one lesson (summary, objectives, concepts, quiz)
- * Without OPENROUTER_API_KEY these return { ok: false } and the client falls back to a
+ * Outline generation falls back from NVIDIA/OpenRouter to Gemini before the client uses a
  * structure-based outline, so uploading never dead-ends.
  */
 
@@ -98,13 +100,18 @@ function sanitizeOutline(raw: RawOutline, chunkCount: number) {
   };
 }
 
-async function buildOutline(body: {
-  fileName?: string;
-  map?: string;
-  chunkCount?: number;
-  totalChars?: number;
-  pages?: number;
-}) {
+type OutlineRequester = (system: string, user: string) => Promise<RawOutline>;
+
+async function buildOutline(
+  body: {
+    fileName?: string;
+    map?: string;
+    chunkCount?: number;
+    totalChars?: number;
+    pages?: number;
+  },
+  requestOutline: OutlineRequester,
+) {
   const chunkCount = Math.max(1, Math.floor(body.chunkCount ?? 1));
   const system = [
     "You are an expert instructional designer. You turn ONE uploaded document (research paper, book, article, magazine, report or notes) into a complete course outline that, if a student finishes it, leaves them understanding the whole document.",
@@ -124,12 +131,82 @@ async function buildOutline(body: {
     (body.map ?? "").slice(0, 22_000),
   ].join("\n");
 
-  const raw = await openRouterJson<RawOutline>(system, user, {
-    maxTokens: 12000,
-  });
+  const raw = await requestOutline(system, user);
   const outline = sanitizeOutline(raw, chunkCount);
   if (outline.modules.length === 0) throw new Error("Model returned an outline with no lessons");
   return outline;
+}
+
+async function geminiJson<T>(system: string, user: string, maxOutputTokens: number): Promise<T> {
+  const apiKey = process.env["GEMINI_API_KEY"]?.trim();
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not set on this server");
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_OUTLINE_MODEL}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: "user", parts: [{ text: user }] }],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens,
+          responseMimeType: "application/json",
+        },
+      }),
+      signal: AbortSignal.timeout(120_000),
+    },
+  );
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(
+      `Gemini ${GEMINI_OUTLINE_MODEL} request failed (${response.status}): ${responseText.slice(0, 400)}`,
+    );
+  }
+
+  let payload: {
+    candidates?: Array<{
+      finishReason?: string;
+      content?: { parts?: Array<{ text?: string }> };
+    }>;
+    promptFeedback?: { blockReason?: string };
+  };
+  try {
+    payload = JSON.parse(responseText) as typeof payload;
+  } catch {
+    throw new Error("Gemini returned an invalid generate-content response");
+  }
+
+  const candidate = payload.candidates?.[0];
+  const content = candidate?.content?.parts
+    ?.map((part) => part.text ?? "")
+    .join("")
+    .trim();
+  if (!content) {
+    throw new Error(
+      `Gemini ${GEMINI_OUTLINE_MODEL} returned no content (finish_reason=${candidate?.finishReason ?? "unknown"}, block_reason=${payload.promptFeedback?.blockReason ?? "none"})`,
+    );
+  }
+  if (candidate?.finishReason === "MAX_TOKENS") {
+    throw new Error(`Gemini ${GEMINI_OUTLINE_MODEL} response exceeded its output-token limit`);
+  }
+
+  const unfenced = content.replace(/^```(?:json)?\s*|\s*```$/gi, "").trim();
+  const start = unfenced.indexOf("{");
+  const end = unfenced.lastIndexOf("}");
+  const json = start >= 0 && end > start ? unfenced.slice(start, end + 1) : unfenced;
+  try {
+    return JSON.parse(json) as T;
+  } catch {
+    throw new Error(
+      `Gemini ${GEMINI_OUTLINE_MODEL} returned malformed JSON: ${json.slice(0, 200)}`,
+    );
+  }
 }
 
 function shuffleQuiz(options: string[], answerIndex: number) {
@@ -205,14 +282,50 @@ export const Route = createFileRoute("/api/course-gen")({
         }
         try {
           if (body["action"] === "outline") {
-            if (!hasOpenRouterKey()) {
-              return Response.json({
-                ok: false,
-                reason: "OPENROUTER_API_KEY is not set on this server",
-              });
+            let nemotronFailure = "OPENROUTER_API_KEY is not set on this server";
+            if (hasOpenRouterKey()) {
+              try {
+                const outline = await buildOutline(
+                  body as Parameters<typeof buildOutline>[0],
+                  (system, user) => openRouterJson<RawOutline>(system, user, { maxTokens: 12000 }),
+                );
+                return Response.json({
+                  ok: true,
+                  model: NEMOTRON_MODEL,
+                  lessonEnrichmentAvailable: true,
+                  outline,
+                });
+              } catch (e) {
+                nemotronFailure = e instanceof Error ? e.message : String(e);
+                console.warn(
+                  "[api/course-gen] Nemotron outline failed; trying Gemini:",
+                  nemotronFailure,
+                );
+              }
             }
-            const outline = await buildOutline(body as Parameters<typeof buildOutline>[0]);
-            return Response.json({ ok: true, model: NEMOTRON_MODEL, outline });
+
+            const geminiApiKey = process.env["GEMINI_API_KEY"]?.trim();
+            if (geminiApiKey) {
+              try {
+                const outline = await buildOutline(
+                  body as Parameters<typeof buildOutline>[0],
+                  (system, user) => geminiJson<RawOutline>(system, user, 12000),
+                );
+                return Response.json({ ok: true, model: GEMINI_OUTLINE_MODEL, outline });
+              } catch (e) {
+                const geminiFailure = e instanceof Error ? e.message : String(e);
+                console.warn("[api/course-gen] Gemini outline failed:", geminiFailure);
+                return Response.json({
+                  ok: false,
+                  reason: `Nemotron failed (${nemotronFailure}); Gemini failed (${geminiFailure})`,
+                });
+              }
+            }
+
+            return Response.json({
+              ok: false,
+              reason: `Nemotron failed (${nemotronFailure}); GEMINI_API_KEY is not set on this server`,
+            });
           }
           if (body["action"] === "lesson") {
             if (!hasOpenRouterKey()) {

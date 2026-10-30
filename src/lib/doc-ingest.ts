@@ -183,7 +183,10 @@ export type Outline = {
 };
 
 function firstSentences(text: string, n: number, max = 260) {
-  const s = text.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/).filter((x) => x.length > 25);
+  const s = text
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/)
+    .filter((x) => x.length > 25);
   return s.slice(0, n).join(" ").slice(0, max);
 }
 
@@ -223,7 +226,10 @@ export function structureOutline(doc: ExtractedDoc, chunks: Chunk[]): Outline {
       .map((h) => h.replace(/^\d+(\.\d+)*[.)]?\s*/, "").slice(0, 50))
       .slice(0, 5);
     lessons.push({
-      title: (heads[0]?.replace(/^\d+(\.\d+)*[.)]?\s*/, "") ?? `Part ${lessons.length + 1}`).slice(0, 80),
+      title: (heads[0]?.replace(/^\d+(\.\d+)*[.)]?\s*/, "") ?? `Part ${lessons.length + 1}`).slice(
+        0,
+        80,
+      ),
       minutes: Math.min(30, Math.max(8, Math.round(text.length / 900))),
       intuition: firstSentences(text, 2) || "A section of the uploaded document.",
       objectives: concepts.slice(0, 3).map((c) => `Explain ${c}`),
@@ -236,8 +242,14 @@ export function structureOutline(doc: ExtractedDoc, chunks: Chunk[]): Outline {
   for (let i = 0; i < lessons.length; i += perModule) {
     const group = lessons.slice(i, i + perModule);
     modules.push({
-      title: lessons.length <= perModule ? title : `Part ${modules.length + 1}: ${group[0]!.title}`.slice(0, 90),
-      summary: group.map((l) => l.title).join(" · ").slice(0, 200),
+      title:
+        lessons.length <= perModule
+          ? title
+          : `Part ${modules.length + 1}: ${group[0]!.title}`.slice(0, 90),
+      summary: group
+        .map((l) => l.title)
+        .join(" · ")
+        .slice(0, 200),
       lessons: group,
     });
   }
@@ -247,7 +259,13 @@ export function structureOutline(doc: ExtractedDoc, chunks: Chunk[]): Outline {
     description: firstSentences(chunks[0]?.text ?? "", 3, 400),
     docType: "document",
     difficulty: "intermediate",
-    tags: keyTerms(chunks.map((c) => c.text).join(" ").slice(0, 20_000), 3),
+    tags: keyTerms(
+      chunks
+        .map((c) => c.text)
+        .join(" ")
+        .slice(0, 20_000),
+      3,
+    ),
     modules,
   };
 }
@@ -273,11 +291,17 @@ function excerptFor(chunks: Chunk[], range: [number, number]): { text: string; r
   };
 }
 
-export type GenerateProgress = { stage: "outline" | "lessons" | "done"; done: number; total: number; note?: string };
+export type GenerateProgress = {
+  stage: "outline" | "lessons" | "done";
+  done: number;
+  total: number;
+  note?: string;
+};
 
 export type GenerateResult = {
   course: Course;
   usedAi: boolean;
+  outlineModel: string;
   warnings: string[];
 };
 
@@ -287,14 +311,28 @@ export async function generateCourse(
 ): Promise<GenerateResult> {
   const warnings: string[] = [];
   const chunks = chunkPages(doc.pages);
-  if (chunks.length === 0) throw new Error("No readable text found. Scanned PDFs (images only) are not supported yet.");
+  if (chunks.length === 0)
+    throw new Error("No readable text found. Scanned PDFs (images only) are not supported yet.");
 
-  opts.onProgress?.({ stage: "outline", done: 0, total: 1, note: "Reading the document and planning the course…" });
+  opts.onProgress?.({
+    stage: "outline",
+    done: 0,
+    total: 1,
+    note: "Reading the document and planning the course…",
+  });
 
   let outline: Outline | null = null;
   let usedAi = false;
+  let outlineModel = "Document structure (native)";
+  let lessonEnrichmentAvailable = false;
   try {
-    const res = await post<{ ok: boolean; reason?: string; outline?: Outline }>({
+    const res = await post<{
+      ok: boolean;
+      reason?: string;
+      model?: string;
+      lessonEnrichmentAvailable?: boolean;
+      outline?: Outline;
+    }>({
       action: "outline",
       fileName: doc.fileName,
       map: buildDocumentMap(chunks),
@@ -305,11 +343,17 @@ export async function generateCourse(
     if (res.ok && res.outline) {
       outline = res.outline;
       usedAi = true;
+      outlineModel = res.model ?? "AI model";
+      lessonEnrichmentAvailable = res.lessonEnrichmentAvailable === true;
     } else {
-      warnings.push(`AI outline unavailable (${res.reason ?? "unknown"}); built the outline from the document's structure instead.`);
+      warnings.push(
+        `AI outline unavailable (${res.reason ?? "unknown"}); built the outline from the document's structure instead.`,
+      );
     }
   } catch (e) {
-    warnings.push(`AI outline failed (${e instanceof Error ? e.message : "error"}); built the outline from the document's structure instead.`);
+    warnings.push(
+      `AI outline failed (${e instanceof Error ? e.message : "error"}); built the outline from the document's structure instead.`,
+    );
   }
   if (!outline) outline = structureOutline(doc, chunks);
 
@@ -317,6 +361,12 @@ export async function generateCourse(
   const total = outline.modules.reduce((n, m) => n + m.lessons.length, 0);
   let done = 0;
   let lessonFailures = 0;
+  const canEnrichLessons = usedAi && lessonEnrichmentAvailable;
+  if (usedAi && !canEnrichLessons) {
+    warnings.push(
+      `Lesson enrichment was skipped because the outline was built with ${outlineModel}; lessons retain the outline-level content and source excerpts.`,
+    );
+  }
 
   const modules: Module[] = [];
   for (const [mi, m] of outline.modules.entries()) {
@@ -336,9 +386,14 @@ export async function generateCourse(
         sourceExcerpt: text,
         sourceRef: ref,
       };
-      opts.onProgress?.({ stage: "lessons", done, total, note: `Writing lesson ${done + 1} of ${total}: ${l.title}` });
+      opts.onProgress?.({
+        stage: "lessons",
+        done,
+        total,
+        note: `Writing lesson ${done + 1} of ${total}: ${l.title}`,
+      });
 
-      if (usedAi && lessonFailures < 3) {
+      if (canEnrichLessons && lessonFailures < 3) {
         try {
           const res = await post<{
             ok: boolean;
@@ -394,7 +449,13 @@ export async function generateCourse(
     difficulty: outline.difficulty,
     status: opts.publish ? "published" : "draft",
     tags: outline.tags,
-    teaching: { depth: "balanced", tone: "encouraging", pacing: "balanced", enforceQuizzes: false, defaultLevel: "normal" },
+    teaching: {
+      depth: "balanced",
+      tone: "encouraging",
+      pacing: "balanced",
+      enforceQuizzes: false,
+      defaultLevel: "normal",
+    },
     modules,
     source: {
       fileName: doc.fileName,
@@ -406,5 +467,5 @@ export async function generateCourse(
     },
   };
   opts.onProgress?.({ stage: "done", done: total, total });
-  return { course, usedAi, warnings };
+  return { course, usedAi, outlineModel, warnings };
 }
